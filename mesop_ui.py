@@ -1,26 +1,24 @@
-import mesop as me
-import time
 import os
-import base64
+import time
 import io
-import google.generativeai as genai
-import chromadb
-import PyPDF2  # For extracting text from PDF files
-import csv
+import mesop as me
 import pandas as pd
+import google.generativeai as genai
 from google.generativeai.types import content_types
 from collections.abc import Iterable
-from utils import *
-import asyncio
-from prediction_engine import PredictionEngine
-# import google_custom_search
+import chromadb
 import serpapi
-# from prettyprinter import pformat
+import PyPDF2
 import json
-# from dotenv import load_dotenv
 import re
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 from sklearn.metrics import accuracy_score, classification_report
+from prediction_engine import PredictionEngine
+from utils import *
 
+############################################ global settings ############################################
 # Remember to set your API key here
 os.environ['GOOGLE_API_KEY'] = 'AIzaSyArMll8tFUpS2tHcPr6di-hb7jWnZubU80'
 
@@ -45,11 +43,6 @@ model = genai.GenerativeModel(
     generation_config=generation_config,
     tools=obj_funcs,
 )
-# fcmodel = genai.GenerativeModel(
-#     model_name="gemini-1.5-pro-002",
-#     generation_config=generation_config,
-#     tools= obj_funcs,
-# )
 
 def tool_config_from_mode(mode: str, fns: Iterable[str] = ()):
     """Create a tool config with the specified function calling mode."""
@@ -60,8 +53,10 @@ def tool_config_from_mode(mode: str, fns: Iterable[str] = ()):
 chat_session = model.start_chat(history=[])
 tool_config = tool_config_from_mode("auto")
 
-# google = google_custom_search.CustomSearch(apikey="your api_key", engine_id="your engine_id")
-
+# Global variables
+_prediction_engine = None
+_related_search_results = None
+############################################ mesop app ############################################
 @me.stateclass
 class State:
     input: str = ""
@@ -72,19 +67,57 @@ class State:
     db_input: str = ""
     db_output: str = ""
     file: me.UploadedFile | None = None
-    pdf_text: str = ""
-    is_training: bool = False
+    news_text: str = ""
+    initialized: bool = False
+    in_building: bool = False
     training_status: str = ""
-    training_error: str = ""
+    factuality_factors: list[str]
+    use_pred_model: bool = True
+    use_gen_model: bool = True
+    use_search_online: bool = True
+    use_function_calling: bool = True
+    prompt_type: str = "FCoT"
 
-_prediction_engine = None
-def get_prediction_engine():
-    global _prediction_engine
-    if _prediction_engine is None:
-        _prediction_engine = PredictionEngine()
-    return _prediction_engine
+# Event handler for checkboxes
+def on_change_checkbox(e: me.CheckboxChangeEvent):
+    state = me.state(State)
+    if e.key == "pred_model":
+        state.use_pred_model = e.checked
+        print("Predictive Model: " + str(state.use_pred_model))
+    elif e.key == "gen_model":
+        state.use_gen_model = e.checked
+        print("Generative Model: " + str(state.use_gen_model))
+    elif e.key == "search_online":
+        state.use_search_online = e.checked
+        print("Search Online: " + str(state.use_search_online))
+    elif e.key == "function_calling":
+        state.use_function_calling = e.checked
+        print("Function Calling: " + str(state.use_function_calling))
 
-# Master function for the page
+# Event handler for the button toggle
+def on_change_button_toggle(e: me.ButtonToggleChangeEvent):
+    state = me.state(State)
+    state.prompt_type = e.values
+    print("Current prompting method: " + str(state.prompt_type))
+
+# Event handler for the build machine button
+def on_click_build_machine(e: me.ClickEvent):
+    state = me.state(State)
+    if e.key == "build_machine":
+        state.in_building = True
+        print("Building...")
+        yield
+        
+        # Initialize the PredictionEngine
+        yield from train_predictive()
+
+        # Complete the build
+        state.in_building = False
+        state.initialized = True
+        print("Build complete.")
+        yield
+
+# Master page
 @me.page(path="/")
 def page():
     with me.box(
@@ -96,239 +129,250 @@ def page():
     ):
         with me.box(
             style=me.Style(
-                width="min(720px, 100%)",
+                width="min(1080px, 100%)",
                 margin=me.Margin.symmetric(horizontal="auto"),
                 padding=me.Padding.symmetric(horizontal=16),
             )
         ):
             header_text()
-            train_predictive_section()
-            chat_window()
-            search_output()
-            uploader()
-            display_pdf_text()
-            chat_input()
-            output()
-            db_input()
-            db_output()
-            # convert_store_lp_data()
-            # convert_store_predai_data()
-        footer()
+            toggles()
+            build_machine_button()
+            
+            if me.state(State).initialized:
+                me.divider()
+                news_input()
+                display_news_article()
+                chat_window()
+                search_output()
+                chat_input()
+                output()
+            footer()
 
+############################################ begin page elements ############################################
 def header_text():
-    with me.box(
-        style=me.Style(
-            padding=me.Padding(top=64, bottom=36),
-        )
-    ):
+    with me.box(style=me.Style(padding=me.Padding(top=64, bottom=36))):
         me.text(
             "Veracity Machine",
             style=me.Style(
                 font_size=36,
                 font_weight=700,
                 background="linear-gradient(90deg, #4285F4, #AA5CDB, #DB4437) text",
-                color="transparent",
-            ),
+                color="transparent"
+            )
+        )
+    with me.box(style=me.Style(padding=me.Padding(bottom=16))):
+        me.text(
+            "Welcome to the Veracity Machine, a tool for analyzing the veracity of news articles.",
+            style=me.Style(font_size=16)
         )
 
-def train_predictive(event: me.ClickEvent):
+# Toggles for selecting the features to include in the analysis
+def toggles():
     state = me.state(State)
-    if state.is_training:
-        return
-    
+    with me.box(style=me.Style(padding=me.Padding(bottom=16), margin=me.Margin(top=32))):
+        me.text("Customize the features you would like to include in your machine. Recommend default options.")
+
+    with me.box(style=me.Style(padding=me.Padding(bottom=16))):
+        me.text("1. Choose the models to be used:")
+        me.checkbox(
+            "Predictive Model (Random Forest Classifier)", 
+            checked=state.use_pred_model, 
+            on_change=on_change_checkbox,
+            key='pred_model',
+            style=me.Style(margin=me.Margin(right=64))
+        )
+        me.checkbox(
+            "Generative Model (gemini-1.5-pro-002)", 
+            checked=state.use_gen_model, 
+            on_change=on_change_checkbox,
+            key='gen_model',
+        )
+
+    with me.box(style=me.Style(padding=me.Padding(bottom=16))):
+        me.text("2. Choose the prompting method:")
+        me.button_toggle(
+            value=state.prompt_type,
+            buttons=[
+            me.ButtonToggleButton(label="Normal Prompting", value="normal"),
+            me.ButtonToggleButton(label="CoT Prompting", value="CoT"),
+            me.ButtonToggleButton(label="FCoT Prompting", value="FCoT"),
+            ],
+            multiple=False, # only one button can be selected at a time
+            hide_selection_indicator=False,
+            on_change=on_change_button_toggle,
+            style=me.Style(margin=me.Margin(top=16, bottom=16)),
+        )
+
+    with me.box(style=me.Style(padding=me.Padding(bottom=16))):
+        me.text("3. Factuality factors (don't have toggle capability in PredAI):")
+        state.factuality_factors = ["Echo Chamber", "Education", "Event Coverage", "Frequency Heuristic", "Location", "Malicious Account", "Misleading Intention", "News Coverage"]
+        for ff in state.factuality_factors:
+            me.checkbox(
+                ff,
+                checked=True,
+                disabled=True, # disabled until predAI can handle this
+                style=me.Style(margin=me.Margin(right=64))
+            )
+
+    with me.box(style=me.Style(padding=me.Padding(bottom=16))):
+        me.text("4. Choose additional functions:")
+        me.checkbox(
+            "Search Online",
+            checked=state.use_search_online,
+            on_change=on_change_checkbox,
+            key='search_online',
+            style=me.Style(margin=me.Margin(right=64))
+        )
+        me.checkbox(
+            "Function Calling",
+            checked=state.use_function_calling,
+            on_change=on_change_checkbox,
+            key='function_calling',
+        )
+
+def build_machine_button():
+    state = me.state(State)
+    with me.box(style=me.Style(padding=me.Padding(top=16), display="flex", justify_content="center")):
+        me.button(
+            "Build" if not state.in_building else "Building...",
+            type="flat",
+            disabled=state.in_building,
+            on_click=on_click_build_machine,
+            key='build_machine',
+            style=me.Style(width=256)
+        )
+
+    with me.box(style=me.Style(padding=me.Padding(top=16, bottom=16), display="flex", justify_content="center")):
+        me.text(state.training_status)
+
+# to train the predictive model
+def train_predictive():
+    global _prediction_engine
+    state = me.state(State)
     try:
-        state.is_training = True
         state.training_status = "Initializing prediction engine..."
         yield
         
         # Initialize prediction engine
-        engine = get_prediction_engine()
-        
+        _prediction_engine = PredictionEngine()
         state.training_status = "Loading dataset and preparing models..."
         yield
         
         # Start the training process
-        engine.load_dataset_and_prepare_models()
-        
+        _prediction_engine.load_dataset_and_prepare_models()
         state.training_status = "Training complete!"
         yield
-        
     except Exception as e:
         state.training_error = f"Training failed: {str(e)}"
-    finally:
-        state.is_training = False
-        yield
 
-# Button element for training predictive model
-def train_predictive_section():
+############################################ begin model elements ############################################
+# ------------------------------------------ Choose News article ------------------------------------------
+# Options for inputting the news article
+def news_input():
     state = me.state(State)
-    
-    # Container box
-    with me.box(
-        style=me.Style(
-            padding=me.Padding.all(16),
-            margin=me.Margin(top=36),
-        )
-    ):
-        # Training button without context manager
-        me.button(
-            "Train Classifier" if not state.is_training else "Training in Progress...",
-            on_click=train_predictive,
-            disabled=state.is_training,
-            style=me.Style(width="100%")
-        )
-        
-        # Show spinner if training
-        if state.is_training:
-            with me.box(
-                style=me.Style(
-                    margin=me.Margin(top=8),
-                    display="flex",
-                    justify_content="center"
-                )
-            ):
-                me.progress_spinner()
-        
-        # Status message
-        if state.training_status:
-            with me.box(
-                style=me.Style(
-                    padding=me.Padding.all(12),
-                    margin=me.Margin(top=8),
-                    background="#F0F4F9",
-                    border_radius=8
-                )
-            ):
-                me.text(state.training_status)
-        
-        # Error message
-        if state.training_error:
-            with me.box(
-                style=me.Style(
-                    padding=me.Padding.all(12),
-                    margin=me.Margin(top=8),
-                    background="#FEE2E2",
-                    border_radius=8
-                )
-            ):
-                me.text(
-                    state.training_error,
-                    style=me.Style(color="#DC2626")
-                )
+    with me.box(style=me.Style(padding=me.Padding(top=16), display="flex", justify_content="center")):
+        me.text("Input the news article you would like to analyze:", style=me.Style(font_weight="bold"))
+    with me.box(style=me.Style(padding=me.Padding(top=16), display="flex", justify_content="center", align_items="center")):
+        # URL input method
+        with me.box(style=me.Style(padding=me.Padding.all(15))):
+            me.input(
+                label="URL for News Article",
+                placeholder="Paste the URL here and press Enter",
+                type="url",
+                on_enter=handle_url,
+                style=me.Style(width=400)
+            )
 
-# Upload function for PDF article
-def uploader():
+        me.text("or", style=me.Style(font_weight="bold"))
+
+        # Upload method from PDF
+        with me.box(style=me.Style(padding=me.Padding.all(15))):
+            me.uploader(
+                label="Upload PDF",
+                accepted_file_types=["application/pdf"],
+                on_upload=handle_upload,
+                type="flat",
+                color="primary",
+                style=me.Style(font_weight="bold"),
+            )
+
+# Event handler for URL input
+def handle_url(e: me.InputEnterEvent):
     state = me.state(State)
-    with me.box(style=me.Style(padding=me.Padding.all(15))):
-        me.uploader(
-            label="Upload PDF",
-            accepted_file_types=["application/pdf"],
-            on_upload=handle_upload,
-            type="flat",
-            color="primary",
-            style=me.Style(font_weight="bold"),
-        )
+    # Helper function for checking validity of URL
+    def is_valid_url(url):
+        try:
+            result = urlparse(url)
+            return all([result.scheme, result.netloc])
+        except ValueError:
+            return False
 
-        if state.file and state.file.mime_type == 'application/pdf':
-            with me.box(style=me.Style(margin=me.Margin.all(10))):
-                me.text(f"File name: {state.file.name}")
-                me.text(f"File size: {state.file.size} bytes")
-                me.text(f"File type: {state.file.mime_type}")
-                # Extract text from the PDF after upload
-                extract_text_from_pdf(state.file)
+    # Helper function for scraping news text from URL
+    def scrape_news_text(url):
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        # Extract paragraphs
+        paragraphs = soup.find_all('p')
+        news_text = '\n'.join([para.get_text() for para in paragraphs])
+        # Extract title
+        title = soup.find('h1').get_text() if soup.find('h1') else "No title found"
+        # Extract authors
+        author_text = ""
+        content = response.content.decode('utf-8')
+        by_index = content.find("By ")
+        if by_index != -1:
+            author_text = content[by_index:by_index + 100]
+            
+        return f"Title: {title}\n\nAuthors: {author_text}\n\n{news_text}"
 
-def handle_upload(event: me.UploadEvent):
+    if is_valid_url(e.value):
+        try:
+            state.news_text = scrape_news_text(e.value)
+        except Exception as ex:
+            state.news_text = f"Failed to scrape the website: {str(ex)}"
+    else:
+        state.news_text = "Not valid URL"
+
+# Event handler for file upload
+def handle_upload(e: me.UploadEvent):
     state = me.state(State)
-    state.file = event.file
+    state.file = e.file
+    if state.file and state.file.mime_type == 'application/pdf':
+        # Extract text from the PDF after upload
+        extract_text_from_pdf(state.file)
 
+# Extract text from the uploaded PDF file
 def extract_text_from_pdf(file: me.UploadedFile):
     """Extracts text from the uploaded PDF file and stores it in the state."""
     state = me.state(State)
-    
     # Wrap the bytes content in a BytesIO object
     pdf_file = io.BytesIO(file.getvalue())
-
     # Initialize the PDF reader
     pdf_reader = PyPDF2.PdfReader(pdf_file)  
     extracted_text = ""
-    
     # Extract text from each page
     for page_num in range(len(pdf_reader.pages)):
         page = pdf_reader.pages[page_num]
         extracted_text += page.extract_text()
+    state.news_text = extracted_text  # Store extracted PDF text in state
 
-    state.pdf_text = extracted_text  # Store extracted PDF text in state
-
-def display_pdf_text():
-    """Display the extracted PDF text."""
+# Display the news input
+def display_news_article():
     state = me.state(State)
-    if state.pdf_text:
-        with me.box(style=me.Style(padding=me.Padding.all(10))):
-            me.text("Extracted PDF Content:")
-            me.text(state.pdf_text)  # Display the entire text
+    if state.news_text:
+        with me.box(style=me.Style(padding=me.Padding.all(10), border=me.Border.all(me.BorderSide(width=3, color="black", style="double")), border_radius=10, overflow="auto", max_height=400)):
+            me.text("News Article:")
+            me.text(state.news_text, type="body-1")  # Display the entire text
 
-# User input for GenAI prompting
-def chat_input():
-    state = me.state(State)
-    with me.box(
-        style=me.Style(
-            padding=me.Padding.all(8),
-            background="white",
-            display="flex",
-            width="100%",
-            border=me.Border.all(
-                me.BorderSide(width=0, style="solid", color="black")
-            ),
-            border_radius=12,
-            box_shadow="0 10px 20px #0000000a, 0 2px 6px #0000000a, 0 0 1px #0000000a",
-        )
-    ):
-        with me.box(
-            style=me.Style(
-                flex_grow=1,
-            )
-        ):
-            me.native_textarea(
-                value=state.input,
-                autosize=True,
-                min_rows=4,
-                placeholder="Enter your customized prompt, or will do default FCOT if empty.",
-                style=me.Style(
-                    padding=me.Padding(top=16, left=16),
-                    background="white",
-                    outline="none",
-                    width="100%",
-                    overflow_y="auto",
-                    border=me.Border.all(
-                        me.BorderSide(style="none"),
-                    ),
-                ),
-                on_blur=textarea_on_blur,
-            )
-        with me.content_button(type="icon", on_click=click_send):
-            me.icon("send")
 
+# ------------------------------------------ Search Functionality -------------------------------------------
+# Input window for user questions
 def chat_window():
     state = me.state(State)
-    with me.box(
-        style=me.Style(
-            padding=me.Padding.all(8),
-            background="white",
-            display="flex",
-            width="100%",
-            border=me.Border.all(
-                me.BorderSide(width=0, style="solid", color="black")
-            ),
-            border_radius=12,
-            box_shadow="0 10px 20px #0000000a, 0 2px 6px #0000000a, 0 0 1px #0000000a",
-            margin=me.Margin(top=36),
-        )
-    ):
-        with me.box(
-            style=me.Style(
-                flex_grow=1,
-            )
-        ):
+    with me.box(style=me.Style(padding=me.Padding(top=32))):
+        me.text("Search Online for Related Information:", style=me.Style(font_weight="bold"))
+    with me.box(style=me.Style(padding=me.Padding.all(8), background="white", display="flex", width="100%", border=me.Border.all(me.BorderSide(width=0, style="solid", color="black")), border_radius=12, box_shadow="0 10px 20px #0000000a, 0 2px 6px #0000000a, 0 0 1px #0000000a", margin=me.Margin(top=16))):
+        with me.box(style=me.Style(flex_grow=1)):
             me.native_textarea(
                 value=state.chat_window,
                 autosize=True,
@@ -349,13 +393,14 @@ def chat_window():
         with me.content_button(type="icon", on_click=click_chat_send):
             me.icon("send")
 
+# Retains the user's input in the chat window
 def search_textarea_on_blur(e: me.InputBlurEvent):
     state = me.state(State)
     state.chat_window = e.value
 
-related_results = None
-
+# Initiate the search process 
 def click_chat_send(e: me.ClickEvent):
+    global _related_search_results
     state = me.state(State)
     if not state.chat_window.strip():
         return
@@ -367,11 +412,11 @@ def click_chat_send(e: me.ClickEvent):
 
     # Conduct the web search
     search_results = web_search(user_prompt)
-
+    
     # Format the search results for display
     if search_results:
-        related_results = f"Search Results for '{user_prompt}':\n\n" + format_search_results_pretty(search_results)
-        state.search_output = related_results
+        _related_search_results = f"Search Results for '{user_prompt}':\n\n" + format_search_results_pretty(search_results)
+        state.search_output = _related_search_results
     else:
         state.search_output = "No results found for your query."
 
@@ -417,10 +462,10 @@ def web_search(user_prompt):
         "hl": "en",
         "gl": "us",
         "google_domain": "google.com",
-        "api_key": ""
+        "api_key": "749dd5738c6934b68bb86b199202f6c1c9328db2638a4abb74502695b1bda013"
         }
-
-    search = serpapi.search(params)
+    search = {}
+    # search = serpapi.search(params) # Uncomment this line to enable the search
     return search
 
 def search_output():
@@ -436,12 +481,57 @@ def search_output():
         ):
             me.text(state.search_output)
 
+# -------------------------------------------------------- Prompting ------------------------------------------------------------
+# User input for GenAI prompting
+def chat_input():
+    state = me.state(State)
+    with me.box(
+        style=me.Style(
+            padding=me.Padding.all(8),
+            background="white",
+            display="flex",
+            width="100%",
+            border=me.Border.all(
+                me.BorderSide(width=0, style="solid", color="black")
+            ),
+            border_radius=12,
+            box_shadow="0 10px 20px #0000000a, 0 2px 6px #0000000a, 0 0 1px #0000000a",
+        )
+    ):
+        with me.box(
+            style=me.Style(
+                flex_grow=1,
+            )
+        ):
+            me.native_textarea(
+                value=state.input,
+                autosize=True,
+                min_rows=4,
+                placeholder="Enter your customized prompt, or will do default FCOT if empty.",
+                style=me.Style(
+                    padding=me.Padding(top=16, left=16),
+                    background="white",
+                    outline="none",
+                    width="100%",
+                    overflow_y="auto",
+                    border=me.Border.all(
+                        me.BorderSide(style="none"),
+                    ),
+                ),
+                on_blur=textarea_on_blur,
+            )
+        with me.content_button(type="icon", on_click=click_send):
+            me.icon("send")
+
 def textarea_on_blur(e: me.InputBlurEvent):
     state = me.state(State)
     state.input = e.value
 
 def click_send(e: me.ClickEvent):
+    global _prediction_engine
+    global _related_search_results
     state = me.state(State)
+    # Kickstart veracity analysis workflow
     if not state.input.strip():  # Check if input is empty or contains only whitespace
         state.input = "Default input text here."  # Default FCT prompt if no input is provided
         return
@@ -451,12 +541,11 @@ def click_send(e: me.ClickEvent):
 
     '''TODO: Potential implementation of chunking here (By statement)'''
 
-    engine = get_prediction_engine()
-    predict_score = engine.predict_new_example(convert_statement_to_series(state.pdf_text))['overall']
+    predict_score = _prediction_engine.predict_new_example(convert_statement_to_series(state.news_text))['overall']
 
     # top_100_statements = get_top_100_statements(input_text)
-    fct_prompt = generate_fct_prompt(state.pdf_text, predict_score)
-    combined_input = combine_pdf_and_prompt(fct_prompt, state.pdf_text)  # Combine prompt with PDF text
+    fct_prompt = generate_fct_prompt(state.news_text, predict_score)
+    combined_input = combine_pdf_and_prompt(fct_prompt, state.news_text)  # Combine prompt with PDF text
     top_100_statements = get_top_100_statements(combined_input)
 
     for chunk in call_api(combined_input):
@@ -509,7 +598,7 @@ def generate_fct_prompt(input_text, predict_score, iterations=3, regular_CoT=Fal
     # Fractal Chain of Thought Prompting with Objective Functions
     prompt = f'Use {iterations} iterations to check the veracity score of this news article. In each, determine what you missed in the previous iteration based on your evaluation of the objective functions. Also put the result from RAG into consideration/rerank.'
     prompt += f'\n\n RAG:\n Here, out of six potential labels (true, mostly-true, half-true, barely-true, false, pants-fire), this is the truthfulness label predicted using a classifier model: {predict_score}.\n These are the top 100 related statement in LiarPLUS dataset that related to this news article: {get_top_100_statements(input_text)}.'
-    prompt += f'Here is some additional information that has been searched from internet: {related_results}.'
+    prompt += f'Here is some additional information that has been searched from internet: {_related_search_results}.'
     for i in range(1, iterations + 1):
         prompt += f"Iteration {i}: Evaluate the text based on the following objectives and also on microfactors, give explanations on each of these:\n"
         prompt += "\nFactuality Factor 1: Frequency Heuristic:\n"
@@ -522,14 +611,36 @@ def generate_fct_prompt(input_text, predict_score, iterations=3, regular_CoT=Fal
     prompt += "Final Evaluation: Return an exact numeric veracity score for the text, and provide a matching label out of these six [true, mostly-true, half-true, barely-true, false, pants-fire]"
     return prompt
 
-def combine_pdf_and_prompt(prompt: str, pdf_text: str) -> str:
-    """Combines the user's prompt with the extracted PDF text."""
-    if not pdf_text:
-        return prompt
-    return f"Prompt: {prompt}\n\nPDF Content: {pdf_text}"  # Combine entire text
+def get_top_100_statements(user_input):
+    # Query ChromaDB for top 100 similar inputs based on cosine similarity
+    results = collection.query(
+        query_texts=[user_input],
+        n_results=100,
+        include=["documents"],
+        where = {"source": {"$in": ["train", "test", "validate"]}}
+    )
 
-def chunk_pdf_text(pdf_text: str) -> list[str]:
-    if not pdf_text:
+    #store and return the number of each 100 statements in dictionary
+    statement_dic = {}
+    for i in range(100):
+        try:
+            statement = results['documents'][0][i].split(', ')[2]
+        except:
+            statement = "placeholder statement"
+        if statement not in statement_dic:
+            statement_dic[statement] = 1
+        else:
+            statement_dic[statement] += 1   
+    return statement_dic
+
+def combine_pdf_and_prompt(prompt: str, news_text: str) -> str:
+    """Combines the user's prompt with the extracted PDF text."""
+    if not news_text:
+        return prompt
+    return f"Prompt: {prompt}\n\nPDF Content: {news_text}"  # Combine entire text
+
+def chunk_news_text(news_text: str) -> list[str]:
+    if not news_text:
         return []
         
     prompt = """Split the following text into logical chunks (max 10 chunks) of reasonable size. 
@@ -543,7 +654,7 @@ def chunk_pdf_text(pdf_text: str) -> list[str]:
     {text}
     """
 
-    response = chat_session.send_message(prompt.format(text=pdf_text))
+    response = chat_session.send_message(prompt.format(text=news_text))
     chunks_text = response.text.strip()
     
     # Split on numbered lines and clean up
@@ -586,8 +697,18 @@ def output():
                 me.markdown(state.output)
             if state.in_progress:
                 with me.box(style=me.Style(margin=me.Margin(top=16))):
-                    me.progress_spinner()
+                    me.progress_spinner()    
 
+############################################ end page elements ############################################
+
+def footer():
+    with me.box(style=me.Style(padding=me.Padding(top=16), display="flex", justify_content="center", align_items="center")):
+        me.text(
+            "DSC180 -- GenAI For Good",
+            style=me.Style(font_size=12,color="#777",)
+        )
+    
+############################################ miscellaneous not used ############################################
 # Manual add function for database (would be deprecated when dataset processing is fully automized)
 def db_input():
     state = me.state(State)
@@ -663,42 +784,6 @@ def db_output():
         ):
             me.text(state.db_output)
 
-# Page footer
-def footer():
-    with me.box(
-        style=me.Style(
-            position="sticky",
-            bottom=0,
-            padding=me.Padding.symmetric(vertical=16, horizontal=16),
-            width="100%",
-            background="#F0F4F9",
-            font_size=14,
-        )
-    ):
-        me.html(
-            "Made with <a href='https://google.github.io/mesop/'>Mesop</a>",
-        )
-
-def get_top_100_statements(user_input):
-    # Query ChromaDB for top 100 similar inputs based on cosine similarity
-    results = collection.query(
-        query_texts=[user_input],
-        n_results=100,
-        include=["documents"],
-        where = {"source": {"$in": ["train", "test", "validate"]}}
-    )
-
-    #store and return the number of each 100 statements in dictionary
-    statement_dic = {}
-    for i in range(100):
-        statement = results['documents'][0][i].split(', ')[2]
-        if statement not in statement_dic:
-            statement_dic[statement] = 1
-        else:
-            statement_dic[statement] += 1   
-    return statement_dic
-
-
 #converting lierplus dataset and store in datebase
 def convert_store_lp_data():
     train_data = pd.read_csv('data/train2.tsv', sep='\t',header=None, dtype=str)
@@ -761,6 +846,7 @@ def convert_store_predai_data():
     print("All PredAI data has been successfully processed and stored in ChromaDB.")
 
 def obtain_model_accuracy(test_size=20):
+    global _prediction_engine
     """Doesn't work when function calling is activated, test_size=20 is when Gemini actually gives useful responses"""
     # Load test statements
     test = pd.read_csv("../data/test2.tsv", sep="\t", header=None, dtype=str).drop(columns=[0]).sample(n=test_size, random_state=15)
@@ -770,10 +856,9 @@ def obtain_model_accuracy(test_size=20):
 
     predictions = []
     rag_retrievals = []
-    engine = get_prediction_engine()
-    engine.load_dataset_and_prepare_models()
+    _prediction_engine.load_dataset_and_prepare_models()
     for statement in test.iterrows():
-        predict_score = engine.predict_new_example(statement[1])['overall'][0]
+        predict_score = _prediction_engine.predict_new_example(statement[1])['overall'][0]
         predictions.append(predict_score)
         rag_100 = get_top_100_statements(statement[1][3])
         rag_retrievals.append(rag_100)
