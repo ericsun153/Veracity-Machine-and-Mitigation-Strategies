@@ -18,7 +18,7 @@ conda create --name <env_name> --file requirements.txt
 ## How to run
 ```python
 cd ./src/
-mesop veracity_machine.py
+mesop mesop_ui.py
 ```
 
 ## Features
