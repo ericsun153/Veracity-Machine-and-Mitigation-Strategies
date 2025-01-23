@@ -20,7 +20,7 @@ from utils import *
 
 ############################################ global settings ############################################
 # Remember to set your API key here
-os.environ['GOOGLE_API_KEY'] = 'AIzaSyArMll8tFUpS2tHcPr6di-hb7jWnZubU80'
+os.environ['GOOGLE_API_KEY'] = 'your_api_key'
 
 # Initialize API
 genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
@@ -462,7 +462,7 @@ def web_search(user_prompt):
         "hl": "en",
         "gl": "us",
         "google_domain": "google.com",
-        "api_key": "749dd5738c6934b68bb86b199202f6c1c9328db2638a4abb74502695b1bda013"
+        "api_key": "your_api_key"
         }
     search = {}
     # search = serpapi.search(params) # Uncomment this line to enable the search
