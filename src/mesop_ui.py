@@ -20,7 +20,7 @@ from utils import *
 
 ############################################ global settings ############################################
 # Remember to set your API key here
-os.environ['GOOGLE_API_KEY'] = 'your_api_key'
+os.environ['GOOGLE_API_KEY'] = 'AIzaSyArMll8tFUpS2tHcPr6di-hb7jWnZubU80'
 
 # Initialize API
 genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
@@ -56,6 +56,7 @@ tool_config = tool_config_from_mode("auto")
 # Global variables
 _prediction_engine = None
 _related_search_results = None
+# _function_calling_outputs = None
 ############################################ mesop app ############################################
 @me.stateclass
 class State:
@@ -462,7 +463,7 @@ def web_search(user_prompt):
         "hl": "en",
         "gl": "us",
         "google_domain": "google.com",
-        "api_key": "your_api_key"
+        "api_key": "749dd5738c6934b68bb86b199202f6c1c9328db2638a4abb74502695b1bda013"
         }
     search = {}
     # search = serpapi.search(params) # Uncomment this line to enable the search
@@ -542,7 +543,8 @@ def click_send(e: me.ClickEvent):
     '''TODO: Potential implementation of chunking here (By statement)'''
 
     predict_score = _prediction_engine.predict_new_example(convert_statement_to_series(state.news_text))['overall']
-
+    
+    # function_calling_outputs = call_function(state.news_text)
     # top_100_statements = get_top_100_statements(input_text)
     fct_prompt = generate_fct_prompt(state.news_text, predict_score)
     combined_input = combine_pdf_and_prompt(fct_prompt, state.news_text)  # Combine prompt with PDF text
@@ -552,6 +554,7 @@ def click_send(e: me.ClickEvent):
         state.output += chunk
         yield
 
+    # state.output += '\n\n The result of factuality scores function calling based on news article:\n\n' + str(function_calling_outputs) + '\n\n'
     state.output += '\n\n The probability of the statement truthness:\n\n' + str(top_100_statements) + '\n\n'
 
     state.in_progress = False
@@ -585,7 +588,7 @@ misleading_intentions = [
     {"description": "Micro Factor 3: Target Audience Assessment", "details": "Analyze audience manipulation. Identify targeting tactics (language, framing). While such tactics can be ethically questionable, they are generally protected speech unless they involve provable falsehoods and meet the very high legal bar for defamation or incitement."}
 ]
 
-def generate_fct_prompt(input_text, predict_score, iterations=3, regular_CoT=False):
+def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None, iterations=3, regular_CoT=False):
     # Only use regular CoT prompting for testing
     if regular_CoT:
         ffs = ['Frequency Heuristic', 'Misleading Intentions']
@@ -596,18 +599,13 @@ def generate_fct_prompt(input_text, predict_score, iterations=3, regular_CoT=Fal
         return prompt
     
     # Fractal Chain of Thought Prompting with Objective Functions
-    prompt = f'Use {iterations} iterations to check the veracity score of this news article. In each, determine what you missed in the previous iteration based on your evaluation of the objective functions. Also put the result from RAG into consideration/rerank.'
-    prompt += f'\n\n RAG:\n Here, out of six potential labels (true, mostly-true, half-true, barely-true, false, pants-fire), this is the truthfulness label predicted using a classifier model: {predict_score}.\n These are the top 100 related statement in LiarPLUS dataset that related to this news article: {get_top_100_statements(input_text)}.'
-    prompt += f'Here is some additional information that has been searched from internet: {_related_search_results}.'
+    prompt = f'Use {iterations} iterations to check the veracity score of this news article. In each, determine what you missed in the previous iteration based on your evaluation of the objective functions. Also put the result from RAG into consideration/rerank.\n'
+    prompt += f'\n\n RAG:\n Here, out of six potential labels (true, mostly-true, half-true, barely-true, false, pants-fire), this is the truthfulness label predicted using a classifier model: {predict_score}.\n These are the top 100 related statement in LiarPLUS dataset that related to this news article: {get_top_100_statements(input_text)}.\n'
+    prompt += f'Here is some additional information that has been searched from internet: {_related_search_results}.\n'
+    prompt += f'Based on the news article, different factuality scores are examined utilizing function calling and these are the results for different factors, take tehm into account for evaluation:{function_calling_outputs}.\n'
     for i in range(1, iterations + 1):
-        prompt += f"Iteration {i}: Evaluate the text based on the following objectives and also on microfactors, give explanations on each of these:\n"
-        prompt += "\nFactuality Factor 1: Frequency Heuristic:\n"
-        for fh in frequency_heuristic:
-            prompt += f"{fh['description']}: {fh['details']}\n"
-        prompt += "\nFactuality Factor 2: Misleading Intentions:\n"
-        for mi in misleading_intentions:
-            prompt += f"{mi['description']}: {mi['details']}\n"
-        prompt += "\nProvide a percentage score and explanation for each objective function ranking and its microfactors.\n\n"
+        prompt += f"Iteration {i}: Analyze the following text using these objective functions: `repetition_analysis`, `origin_tracing`, `evidence_verification`, `omission_checks`, `exaggeration_analysis`, `target_audience_assessment`. For each function, provide explanations on each of their microfactors and return a percentage score.\n"
+
     prompt += "Final Evaluation: Return an exact numeric veracity score for the text, and provide a matching label out of these six [true, mostly-true, half-true, barely-true, false, pants-fire]"
     return prompt
 
@@ -670,7 +668,6 @@ def chunk_news_text(news_text: str) -> list[str]:
             
     return chunks
    
-    
 # Sends API call to GenAI model with user input
 def call_api(input_text):
     context = " "
@@ -680,6 +677,52 @@ def call_api(input_text):
     # time.sleep(0.5)
     # yield response.candidates[0].content.parts[0].text
     yield response.parts[0].text
+
+def call_function(input_text):
+    context = " "
+    # Add context to the prompt
+    full_prompt = f"Context: {context}\n\nUser: {input_text}"
+    response = chat_session.send_message(full_prompt, tool_config=tool_config)
+    
+    response_text = ""
+    # _function_calling_outputs = ""
+    if response.candidates:
+        for candidate in response.candidates:
+            if candidate.content.parts:
+                for part in candidate.content.parts:
+                    if hasattr(part, 'function_call'): #If the model calls a function
+                        func_call = part.function_call
+                        #Get the function from utils.py
+                        func_name = func_call.name
+                        func_args = func_call.args
+
+                        try:
+                            func_to_call = globals().get(func_name) #get the function from the global scope
+                            
+                            if func_to_call:
+                                if func_args and "text" in func_args: #if "text" is in func_args, we pass all of the args as they are
+                                    func_output = func_to_call(**func_args)
+                                else: #otherwise we pass it with the text parameter we have
+                                    func_output = func_to_call(text = input_text)
+                                response_text += f"Function call '{func_name}' output: {func_output}\n"
+                                # _function_calling_outputs += f"Function call '{func_name}' output: {func_output}\n"
+                            else:
+                                response_text += f"Function '{func_name}' not found\n"
+                                # _function_calling_outputs += f"Function '{func_name}' not found\n"
+                            
+                        except Exception as e:
+                                response_text += f"Error calling function: {str(e)}\n"
+                                # _function_calling_outputs += f"Error calling function: {str(e)}\n"
+
+                    elif hasattr(part, 'text'):
+                        response_text += part.text
+                        # _function_calling_outputs += part.text
+                        
+    else:
+        response_text += "No candidates returned in response"
+        # _function_calling_outputs += "No candidates returned in response"
+    
+    return response_text
 
 # Display output from GenAI model
 def output():

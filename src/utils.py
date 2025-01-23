@@ -1,6 +1,6 @@
 import re
 
-def repetition_analysis(text: str) -> dict:
+def repetition_analysis(text: str, **kwargs) -> dict:
     # Detect overused words, phrases, and repetitive structures
     words = re.findall(r'\b\w+\b', text.lower())
     total_word_count = len(words)
@@ -25,7 +25,7 @@ def repetition_analysis(text: str) -> dict:
     return {"score": score, "details": details}
 
 
-def origin_tracing(text: str) -> dict:
+def origin_tracing(text: str, **kwargs) -> dict:
     # Track credible sources, vague sources, and contextual fallacies
     credible_sources = ["New York Times", "BBC", "Journal", "Harvard Study", "Pew Research", "NBC", "CNN"]
     vague_sources = ["many say", "some claim", "experts believe", "widely reported", "it is said"]
@@ -51,7 +51,7 @@ def origin_tracing(text: str) -> dict:
     return {"score": score, "details": details}
 
 
-def evidence_verification(text: str) -> dict:
+def evidence_verification(text: str, **kwargs) -> dict:
     # Focus on authority and the presence of logical fallacies
     expert_keywords = ["expert", "analysis", "data", "study", "evidence", "research"]
     authority_phrases = ["according to a study", "research shows", "data suggests", "experts agree", "studies confirm"]
@@ -75,7 +75,7 @@ def evidence_verification(text: str) -> dict:
     return {"score": score, "details": details}
 
 
-def omission_checks(text: str) -> dict:
+def omission_checks(text: str, **kwargs) -> dict:
     # Detect language implying critical omissions and checks for selective framing
     omission_indicators = ["left out", "excluded", "did not mention", "missing", "fails to include", "overlooks"]
     selective_phrases = ["only tells part of the story", "fails to provide full context", "hides important details", "one-sided"]
@@ -93,7 +93,7 @@ def omission_checks(text: str) -> dict:
     return {"score": score, "details": details}
 
 
-def exaggeration_analysis(text: str) -> dict:
+def exaggeration_analysis(text: str, **kwargs) -> dict:
     # Identify hyperbolic words and intensifiers
     hyperbole_words = ["scandal", "unbelievable", "never seen before", "shocking", "incredible", "outrage", "catastrophe"]
     intensifiers = ["very", "extremely", "incredibly", "deeply", "highly", "absolutely"]
@@ -116,7 +116,7 @@ def exaggeration_analysis(text: str) -> dict:
     return {"score": score, "details": details}
 
 
-def target_audience_assessment(text: str) -> dict:
+def target_audience_assessment(text: str, **kwargs) -> dict:
     # Look for emotionally manipulative, urgency and tribalism languages
     targeting_keywords = ["you must", "they don’t want you to know", "us vs. them", "wake up", "be aware", "fight back"]
     urgency_phrases = ["protect your family", "act now", "don't be fooled", "stand up", "they are hiding"]
