@@ -64,7 +64,7 @@ class State:
     output: str = ""
     in_progress: bool = False
     chat_window: str = ""
-    search_output: str = ""
+    search_display: str = ""
     db_input: str = ""
     db_output: str = ""
     file: me.UploadedFile | None = None
@@ -391,7 +391,7 @@ def chat_window():
                 ),
                 on_blur=search_textarea_on_blur,
             )
-        with me.content_button(type="icon", on_click=click_chat_send):
+        with me.content_button(type="icon", on_click=click_search_send):
             me.icon("send")
 
 # Retains the user's input in the chat window
@@ -400,7 +400,7 @@ def search_textarea_on_blur(e: me.InputBlurEvent):
     state.chat_window = e.value
 
 # Initiate the search process 
-def click_chat_send(e: me.ClickEvent):
+def click_search_send(e: me.ClickEvent):
     global _related_search_results
     state = me.state(State)
     if not state.chat_window.strip():
@@ -408,7 +408,7 @@ def click_chat_send(e: me.ClickEvent):
     
     state.in_progress = True  # Start spinner for progress indication
     user_prompt = state.chat_window
-    state.search_output = "Searching for results...\n"
+    state.search_display = "Searching for results...\n"
     yield
 
     # Conduct the web search
@@ -416,44 +416,40 @@ def click_chat_send(e: me.ClickEvent):
     
     # Format the search results for display
     if search_results:
-        _related_search_results = f"Search Results for '{user_prompt}':\n\n" + format_search_results_pretty(search_results)
-        state.search_output = _related_search_results
+        # Rough parse of search results
+        state.search_output = {'organic_results': None, 'top_stories': None, 'knowledge_graph': None}
+        if 'organic_results' in search_results.keys():
+            state.search_output['organic_results'] = search_results['organic_results']
+        if 'top_stories' in search_results.keys():
+            state.search_output['top_stories'] = search_results['top_stories']
+        if 'knowledge_graph' in search_results.keys():
+            state.search_output['knowledge_graph'] = search_results['knowledge_graph']
+
+        _related_search_results = state.search_output
+        state.search_display = f"Search Results for '{user_prompt}':\n\n" + format_search_results(state.search_output)
     else:
-        state.search_output = "No results found for your query."
+        state.search_display = "No results found for your query."
 
     state.in_progress = False
     yield
 
-# Function to recursively make objects serializable
-def extract_serializable_data(obj):
-    """Recursively convert non-serializable objects to serializable types."""
-    if isinstance(obj, dict):
-        # Convert non-serializable keys to strings
-        return {str(key): extract_serializable_data(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [extract_serializable_data(item) for item in obj]
-    elif hasattr(obj, "__dict__"):
-        # Convert objects with __dict__ attribute to dictionaries
-        return extract_serializable_data(vars(obj))
-    elif isinstance(obj, (str, int, float, bool)) or obj is None:
-        return obj  # Leave primitive types as-is
-    else:
-        return str(obj)  # Convert unsupported types to strings
+def format_search_results(results):
+    search_display_text = ""
+    search_display_text += "### Organic Results\n"
+    for o_r in results['organic_results']:
+        search_display_text += f"    Title: {o_r['title']}\n    Link: {o_r['link']}\n    Date: {o_r['date']}\n    Description: {o_r['snippet']}\n    Source: {o_r['source']}\n\n"
 
-def format_search_results_pretty(search_results):
-    """Formats search results as a pretty JSON string."""
-    try:
-        if hasattr(search_results, "raw_response"):
-            search_dict = search_results.raw_response  # Raw response if available
-        else:
-            search_dict = extract_serializable_data(vars(search_results))  # Fallback: Use vars()
+    search_display_text += "### Top Stories\n"
+    for t_s in results['top_stories']:
+        search_display_text += f"    Title: {t_s['title']}\n    Link: {t_s['link']}\n    Date: {t_s['date']}\n    Source: {t_s['source']}\n\n"
 
-        # Pretty-print the JSON string
-        pretty_json = json.dumps(search_dict, indent=4, ensure_ascii=False)
-        return pretty_json
+    search_display_text += "### Knowledge Graph\n"
+    for title, item in results['knowledge_graph'].items():
+        if title not in ['serpapi_knowledge_graph_search_link', 'kgmid']:
+            search_display_text += f"    {title.replace('_', ' ').capitalize()}: {item}\n"
+    search_display_text += "\n"
+    return search_display_text
 
-    except Exception as e:
-        print(f"Error serializing search results: {e}")
 
 def web_search(user_prompt):
     # Conduct a Google Custom Search query
@@ -465,13 +461,12 @@ def web_search(user_prompt):
         "google_domain": "google.com",
         "api_key": "749dd5738c6934b68bb86b199202f6c1c9328db2638a4abb74502695b1bda013"
         }
-    search = {}
-    # search = serpapi.search(params) # Uncomment this line to enable the search
+    search = serpapi.search(params) # Uncomment this line to enable the search
     return search
 
 def search_output():
     state = me.state(State)
-    if state.search_output:
+    if state.search_display:
         with me.box(
             style=me.Style(
                 background="#F0F4F9",
@@ -480,7 +475,7 @@ def search_output():
                 margin=me.Margin(top=36),
             )
         ):
-            me.text(state.search_output)
+            me.markdown(state.search_display)
 
 # -------------------------------------------------------- Prompting ------------------------------------------------------------
 # User input for GenAI prompting
