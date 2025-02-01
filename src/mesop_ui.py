@@ -20,7 +20,7 @@ from utils import *
 
 ############################################ global settings ############################################
 # Remember to set your API key here
-os.environ['GOOGLE_API_KEY'] = 'AIzaSyArMll8tFUpS2tHcPr6di-hb7jWnZubU80'
+os.environ['GOOGLE_API_KEY'] = 'AIzaSyDzisIVgGfmYRIm5WkYGXkO7pO1JLcWHuY'
 
 # Initialize API
 genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
@@ -539,9 +539,9 @@ def click_send(e: me.ClickEvent):
 
     predict_score = _prediction_engine.predict_new_example(convert_statement_to_series(state.news_text))['overall']
     
-    # function_calling_outputs = call_function(state.news_text)
+    function_calling_outputs = call_function(state.news_text)
     # top_100_statements = get_top_100_statements(input_text)
-    fct_prompt = generate_fct_prompt(state.news_text, predict_score)
+    fct_prompt = generate_fct_prompt(state.news_text, predict_score, function_calling_outputs)
     combined_input = combine_pdf_and_prompt(fct_prompt, state.news_text)  # Combine prompt with PDF text
     top_100_statements = get_top_100_statements(combined_input)
 
@@ -549,7 +549,7 @@ def click_send(e: me.ClickEvent):
         state.output += chunk
         yield
 
-    # state.output += '\n\n The result of factuality scores function calling based on news article:\n\n' + str(function_calling_outputs) + '\n\n'
+    state.output += '\n\n The result of factuality scores function calling based on news article:\n\n' + str(function_calling_outputs) + '\n\n'
     state.output += '\n\n The probability of the statement truthness:\n\n' + str(top_100_statements) + '\n\n'
 
     state.in_progress = False
@@ -668,7 +668,7 @@ def call_api(input_text):
     context = " "
     # Add context to the prompt
     full_prompt = f"Context: {context}\n\nUser: {input_text}"
-    response = chat_session.send_message(full_prompt, tool_config=tool_config)
+    response = chat_session.send_message(full_prompt)
     # time.sleep(0.5)
     # yield response.candidates[0].content.parts[0].text
     yield response.parts[0].text
