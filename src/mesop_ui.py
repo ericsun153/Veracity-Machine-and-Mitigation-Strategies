@@ -7,8 +7,8 @@ import google.generativeai as genai
 from google.generativeai.types import content_types
 from collections.abc import Iterable
 import chromadb
-import serpapi
 import PyPDF2
+import http.client
 import json
 import re
 import requests
@@ -20,7 +20,7 @@ from utils import *
 
 ############################################ global settings ############################################
 # Remember to set your API key here
-os.environ['GOOGLE_API_KEY'] = 'AIzaSyArMll8tFUpS2tHcPr6di-hb7jWnZubU80'
+os.environ['GOOGLE_API_KEY'] = 'AIzaSyBBuM8yb72NEARwvEJLr_ZSGPKQYBn0tSQ'
 
 # Initialize API
 genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
@@ -63,7 +63,7 @@ class State:
     input: str = ""
     output: str = ""
     in_progress: bool = False
-    chat_window: str = ""
+    search_input_text: str = ""
     search_display: str = ""
     db_input: str = ""
     db_output: str = ""
@@ -143,7 +143,7 @@ def page():
                 me.divider()
                 news_input()
                 display_news_article()
-                chat_window()
+                search_input()
                 search_output()
                 chat_input()
                 output()
@@ -296,6 +296,16 @@ def news_input():
                 color="primary",
                 style=me.Style(font_weight="bold"),
             )
+    
+    with me.box(style=me.Style(display="flex", justify_content="center")):
+        me.textarea(
+            label="Or paste the news text here:",
+            placeholder="Paste and Press Enter",        
+            shortcuts={
+                me.Shortcut(key="enter"): handle_manual_input,
+            },
+            style=me.Style(width=800, height=200)
+        )
 
 # Event handler for URL input
 def handle_url(e: me.InputEnterEvent):
@@ -357,6 +367,10 @@ def extract_text_from_pdf(file: me.UploadedFile):
         extracted_text += page.extract_text()
     state.news_text = extracted_text  # Store extracted PDF text in state
 
+def handle_manual_input(e: me.InputEnterEvent):
+    state = me.state(State)
+    state.news_text = e.value
+
 # Display the news input
 def display_news_article():
     state = me.state(State)
@@ -368,14 +382,14 @@ def display_news_article():
 
 # ------------------------------------------ Search Functionality -------------------------------------------
 # Input window for user questions
-def chat_window():
+def search_input():
     state = me.state(State)
     with me.box(style=me.Style(padding=me.Padding(top=32))):
         me.text("Search Online for Related Information:", style=me.Style(font_weight="bold"))
     with me.box(style=me.Style(padding=me.Padding.all(8), background="white", display="flex", width="100%", border=me.Border.all(me.BorderSide(width=0, style="solid", color="black")), border_radius=12, box_shadow="0 10px 20px #0000000a, 0 2px 6px #0000000a, 0 0 1px #0000000a", margin=me.Margin(top=16))):
         with me.box(style=me.Style(flex_grow=1)):
             me.native_textarea(
-                value=state.chat_window,
+                value=state.search_input_text,
                 autosize=True,
                 min_rows=4,
                 placeholder="Enter your prompt or query. Search results will be automatically included.",
@@ -397,17 +411,17 @@ def chat_window():
 # Retains the user's input in the chat window
 def search_textarea_on_blur(e: me.InputBlurEvent):
     state = me.state(State)
-    state.chat_window = e.value
+    state.search_input_text = e.value
 
 # Initiate the search process 
 def click_search_send(e: me.ClickEvent):
     global _related_search_results
     state = me.state(State)
-    if not state.chat_window.strip():
+    if not state.search_input_text.strip():
         return
     
     state.in_progress = True  # Start spinner for progress indication
-    user_prompt = state.chat_window
+    user_prompt = state.search_input_text
     state.search_display = "Searching for results...\n"
     yield
 
@@ -417,13 +431,13 @@ def click_search_send(e: me.ClickEvent):
     # Format the search results for display
     if search_results:
         # Rough parse of search results
-        state.search_output = {'organic_results': None, 'top_stories': None, 'knowledge_graph': None}
-        if 'organic_results' in search_results.keys():
-            state.search_output['organic_results'] = search_results['organic_results']
-        if 'top_stories' in search_results.keys():
-            state.search_output['top_stories'] = search_results['top_stories']
-        if 'knowledge_graph' in search_results.keys():
-            state.search_output['knowledge_graph'] = search_results['knowledge_graph']
+        state.search_output = {'organic_results': [], 'top_stories': [], 'knowledge_graph': {}}
+        if 'organic' in search_results.keys():
+            state.search_output['organic_results'] = search_results['organic']
+        if 'topStories' in search_results.keys():
+            state.search_output['top_stories'] = search_results['topStories']
+        if 'knowledgeGraph' in search_results.keys():
+            state.search_output['knowledge_graph'] = search_results['knowledgeGraph']
 
         _related_search_results = state.search_output
         state.search_display = f"Search Results for '{user_prompt}':\n\n" + format_search_results(state.search_output)
@@ -437,32 +451,40 @@ def format_search_results(results):
     search_display_text = ""
     search_display_text += "### Organic Results\n"
     for o_r in results['organic_results']:
-        search_display_text += f"    Title: {o_r['title']}\n    Link: {o_r['link']}\n    Date: {o_r['date']}\n    Description: {o_r['snippet']}\n    Source: {o_r['source']}\n\n"
+        for title, item in o_r.items():
+            search_display_text += f"    {title.replace('_', ' ').capitalize()}: {item}\n"
+        search_display_text += "\n"
 
     search_display_text += "### Top Stories\n"
     for t_s in results['top_stories']:
-        search_display_text += f"    Title: {t_s['title']}\n    Link: {t_s['link']}\n    Date: {t_s['date']}\n    Source: {t_s['source']}\n\n"
+        for title, item in t_s.items():
+            search_display_text += f"    {title.replace('_', ' ').capitalize()}: {item}\n"
+        search_display_text += "\n"
 
     search_display_text += "### Knowledge Graph\n"
     for title, item in results['knowledge_graph'].items():
-        if title not in ['serpapi_knowledge_graph_search_link', 'kgmid']:
+        if title not in ['serpapi_knowledge_graph_search_link', 'kgmid', 'imageUrl']:
             search_display_text += f"    {title.replace('_', ' ').capitalize()}: {item}\n"
     search_display_text += "\n"
     return search_display_text
 
 
 def web_search(user_prompt):
+    conn = http.client.HTTPSConnection("google.serper.dev")
+    payload = json.dumps({
+    "q": user_prompt,
+    })
+    headers = {
+    'X-API-KEY': '6315ba893c6d94e58d5f0a386592a0cab6e8a78c',
+    'Content-Type': 'application/json'
+    }
     # Conduct a Google Custom Search query
-    params = {
-        "q": user_prompt,
-        "location": "San Diego, California, United States",
-        "hl": "en",
-        "gl": "us",
-        "google_domain": "google.com",
-        "api_key": "749dd5738c6934b68bb86b199202f6c1c9328db2638a4abb74502695b1bda013"
-        }
-    search = serpapi.search(params) # Uncomment this line to enable the search
-    return search
+    conn.request("POST", "/search", payload, headers)
+    res = conn.getresponse()
+    search = res.read()
+    print(search.decode("utf-8")[:200])
+    
+    return json.loads(search.decode('utf-8'))
 
 def search_output():
     state = me.state(State)
