@@ -72,7 +72,7 @@ pip install mesop google-generativeai chromadb PyPDF2
 
 4. **Run the app:**
     ```python
-    mesop veracity_machine.py
+    mesop mesop_ui.py
     ```
 
 ## Usage
