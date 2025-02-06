@@ -102,4 +102,4 @@ pip install mesop google-generativeai chromadb PyPDF2
 - **news.pdf**: Sample dataset of political news in PDF format for model evaluation.
 - **prediction_engine.py**: Core machine learning pipeline for building and evaluating predictive models.
 - **utils.py**: Provides utility and helper functions for function calling.
-- **veracity_machine.py**: Main script integrating PredictiveAI and GenAI models functionalities.
+- **mesop_ui.py**: Main script integrating PredictiveAI and GenAI models functionalities.
