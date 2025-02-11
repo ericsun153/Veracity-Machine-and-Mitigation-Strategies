@@ -20,7 +20,7 @@ from utils import *
 
 ############################################ global settings ############################################
 # Remember to set your API key here
-os.environ['GOOGLE_API_KEY'] = 'AIzaSyDzisIVgGfmYRIm5WkYGXkO7pO1JLcWHuY'
+os.environ['GOOGLE_API_KEY'] = 'AIzaSyBBuM8yb72NEARwvEJLr_ZSGPKQYBn0tSQ'
 
 # Initialize API
 genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
@@ -482,7 +482,7 @@ def web_search(user_prompt):
     conn.request("POST", "/search", payload, headers)
     res = conn.getresponse()
     search = res.read()
-    print(search.decode("utf-8")[:200])
+    print("Returned search results: " + search.decode("utf-8")[:200])
     
     return json.loads(search.decode('utf-8'))
 
@@ -503,71 +503,51 @@ def search_output():
 # User input for GenAI prompting
 def chat_input():
     state = me.state(State)
-    with me.box(
-        style=me.Style(
-            padding=me.Padding.all(8),
-            background="white",
-            display="flex",
-            width="100%",
-            border=me.Border.all(
-                me.BorderSide(width=0, style="solid", color="black")
-            ),
-            border_radius=12,
-            box_shadow="0 10px 20px #0000000a, 0 2px 6px #0000000a, 0 0 1px #0000000a",
-        )
-    ):
-        with me.box(
-            style=me.Style(
-                flex_grow=1,
-            )
-        ):
+    with me.box(style=me.Style(padding=me.Padding.all(8), background="white", display="flex", width="100%", border=me.Border.all(me.BorderSide(width=0, style="solid", color="black")), border_radius=12, box_shadow="0 10px 20px #0000000a, 0 2px 6px #0000000a, 0 0 1px #0000000a",)):
+        with me.box(style=me.Style(flex_grow=1,)):
             me.native_textarea(
                 value=state.input,
                 autosize=True,
                 min_rows=4,
                 placeholder="Enter your customized prompt, or will do default FCOT if empty.",
-                style=me.Style(
-                    padding=me.Padding(top=16, left=16),
-                    background="white",
-                    outline="none",
-                    width="100%",
-                    overflow_y="auto",
-                    border=me.Border.all(
-                        me.BorderSide(style="none"),
-                    ),
-                ),
+                style=me.Style(padding=me.Padding(top=16, left=16), background="white", outline="none", width="100%", overflow_y="auto", border=me.Border.all(me.BorderSide(style="none"),),),
                 on_blur=textarea_on_blur,
             )
-        with me.content_button(type="icon", on_click=click_send):
+        with me.content_button(type="icon", on_click=initiate_analysis):
             me.icon("send")
 
 def textarea_on_blur(e: me.InputBlurEvent):
     state = me.state(State)
     state.input = e.value
 
-def click_send(e: me.ClickEvent):
+def initiate_analysis(e: me.ClickEvent):
     global _prediction_engine
     global _related_search_results
     state = me.state(State)
+
     # Kickstart veracity analysis workflow
     if not state.input.strip():  # Check if input is empty or contains only whitespace
         state.input = "Default input text here."  # Default FCT prompt if no input is provided
         return
     
     state.in_progress = True
-    input_text = state.input
+    yield
 
-    '''TODO: Potential implementation of chunking here (By statement)'''
-
+    if _prediction_engine is None:
+        train_predictive()
     predict_score = _prediction_engine.predict_new_example(convert_statement_to_series(state.news_text))['overall']
     
+    # Function Calling
     function_calling_outputs = call_function(state.news_text)
-    # top_100_statements = get_top_100_statements(input_text)
-    fct_prompt = generate_fct_prompt(state.news_text, predict_score, function_calling_outputs)
-    combined_input = combine_pdf_and_prompt(fct_prompt, state.news_text)  # Combine prompt with PDF text
-    top_100_statements = get_top_100_statements(combined_input)
 
-    for chunk in call_api(combined_input):
+    # RAG
+    top_100_statements = get_top_100_statements(state.news_text)
+
+    # Generate FCoT prompt
+    context = " "
+    combined_input = generate_fct_prompt(state.news_text, predict_score, function_calling_outputs)
+
+    for chunk in call_api(context, combined_input):
         state.output += chunk
         yield
 
@@ -592,20 +572,20 @@ def convert_statement_to_series(statement):
     return pd.Series(['','',subject, statement, speaker, speaker_title, state, party_aff,'0.0','0.0','0.0','0.0','0.0', context, ''])
 
 # Fractal COT & Function Call
-# Define the complex objective functions
-frequency_heuristic = [
-    {"description": "Micro Factor 1: Repetition Analysis", "details": "Analyzing wider coverage helps assess consensus. If multiple independent sources confirm manipulation, it strengthens the claim. Even widespread agreement about deceptive editing wouldn't automatically justify government action against CBS. The First Amendment protects against content-based restrictions."},
-    {"description": "Micro Factor 2: Origin Tracing", "details": "Confirmed sources are critical. Discrepancies between reporting and original sources raise red flags."},
-    {"description": "Micro Factor 3: Evidence Verification", "details": "Expert analysis is the most crucial element. Expert opinions on video manipulation are essential. Expert testimony would be necessary for any legal action alleging manipulation, though such a case would face significant First Amendment hurdles."}
-]
-
-misleading_intentions = [
-    {"description": "Micro Factor 1: Omission Checks", "details": "Assess the omissions' impact. Did they distort the message? Did they create a demonstrably false representation? (Proving this is difficult)."},
-    {"description": "Micro Factor 2: Exaggeration Analysis", "details": "Evaluate the 'scandal' claim. Does the evidence support it, or is it hyperbole? Does the situation, even if accurately reported, justify calls for license revocation under existing legal and constitutional frameworks?"},
-    {"description": "Micro Factor 3: Target Audience Assessment", "details": "Analyze audience manipulation. Identify targeting tactics (language, framing). While such tactics can be ethically questionable, they are generally protected speech unless they involve provable falsehoods and meet the very high legal bar for defamation or incitement."}
-]
 
 def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None, iterations=3, regular_CoT=False):
+    # Define the complex objective functions
+    frequency_heuristic = [
+        {"description": "Micro Factor 1: Repetition Analysis", "details": "Analyzing wider coverage helps assess consensus. If multiple independent sources confirm manipulation, it strengthens the claim. Even widespread agreement about deceptive editing wouldn't automatically justify government action against CBS. The First Amendment protects against content-based restrictions."},
+        {"description": "Micro Factor 2: Origin Tracing", "details": "Confirmed sources are critical. Discrepancies between reporting and original sources raise red flags."},
+        {"description": "Micro Factor 3: Evidence Verification", "details": "Expert analysis is the most crucial element. Expert opinions on video manipulation are essential. Expert testimony would be necessary for any legal action alleging manipulation, though such a case would face significant First Amendment hurdles."}
+    ]
+
+    misleading_intentions = [
+        {"description": "Micro Factor 1: Omission Checks", "details": "Assess the omissions' impact. Did they distort the message? Did they create a demonstrably false representation? (Proving this is difficult)."},
+        {"description": "Micro Factor 2: Exaggeration Analysis", "details": "Evaluate the 'scandal' claim. Does the evidence support it, or is it hyperbole? Does the situation, even if accurately reported, justify calls for license revocation under existing legal and constitutional frameworks?"},
+        {"description": "Micro Factor 3: Target Audience Assessment", "details": "Analyze audience manipulation. Identify targeting tactics (language, framing). While such tactics can be ethically questionable, they are generally protected speech unless they involve provable falsehoods and meet the very high legal bar for defamation or incitement."}
+    ]
     # Only use regular CoT prompting for testing
     if regular_CoT:
         ffs = ['Frequency Heuristic', 'Misleading Intentions']
@@ -616,14 +596,111 @@ def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None
         return prompt
     
     # Fractal Chain of Thought Prompting with Objective Functions
-    prompt = f'Use {iterations} iterations to check the veracity score of this news article. In each, determine what you missed in the previous iteration based on your evaluation of the objective functions. Also put the result from RAG into consideration/rerank.\n'
-    prompt += f'\n\n RAG:\n Here, out of six potential labels (true, mostly-true, half-true, barely-true, false, pants-fire), this is the truthfulness label predicted using a classifier model: {predict_score}.\n These are the top 100 related statement in LiarPLUS dataset that related to this news article: {get_top_100_statements(input_text)}.\n'
-    prompt += f'Here is some additional information that has been searched from internet: {_related_search_results}.\n'
-    prompt += f'Based on the news article, different factuality scores are examined utilizing function calling and these are the results for different factors, take tehm into account for evaluation:{function_calling_outputs}.\n'
-    for i in range(1, iterations + 1):
-        prompt += f"Iteration {i}: Analyze the following text using these objective functions: `repetition_analysis`, `origin_tracing`, `evidence_verification`, `omission_checks`, `exaggeration_analysis`, `target_audience_assessment`. For each function, provide explanations on each of their microfactors and return a percentage score.\n"
+    prompt = '''
+    You are an expert at identifying misinformation and disinformation within news articles, such as bias, manipulative tactics, or false information. You will perform all analysis based on supporting evidence either from your existing knowledge or additional context. All fact-checking must be thorough and accurate. 
+    
+    ### Objective:
+    Analyze the provided text using the following **Factuality Factors** to detect disinformation or misinformation effectively. Perform iterative analysis across three iterations, refining the results in each pass.
+    
+    -------------------
 
-    prompt += "Final Evaluation: Return an exact numeric veracity score for the text, and provide a matching label out of these six [true, mostly-true, half-true, barely-true, false, pants-fire]"
+    ### Factuality Factors:
+    1.** Frequency Heuristics **: 
+        - (micro factor 1) Repetition Analysis: How frequently and widely is the claim repeated across different platforms and sources? Score based on the following criteria:
+            0 (Rare): Claim appears very infrequently and in limited locations.
+            1 (Limited): Claim appears in a few sources, with limited reach, and shows no clear pattern of spread.
+            2 (Moderate): Claim appears in a moderate number of sources, shows some reach, and may have some periods of increased activity.
+            3 (Frequent): Claim appears frequently, has significant reach, and shows a clear pattern of spread across multiple platforms.
+            4 (Widespread): Claim appears extremely frequently, has very high reach, is actively spreading on multiple platforms, and may be trending.
+
+	    - (micro factor 2) Origin Tracing: Where did the frequently repeated information originate? Is it from a credible source, or is it from a questionable origin (e.g., bot network, conspiracy website)? Score based on the following criteria:
+            0 (Highly Credible): Originates from a highly credible and reliable source (e.g., a reputable news agency with a history of accurate reporting, a peer-reviewed scientific journal).
+            1 (Credible): Originates from a generally credible source (e.g., established news organization, government agency), but there might be some caveats (e.g., known biases).
+            2 (Neutral): Originates from a source with a neutral reputation or a source where credibility is difficult to assess (e.g., a blog with no clear editorial standards, a social media post from an individual with no established expertise).
+            3 (Questionable): Originates from a source with a questionable reputation (e.g., a website known for spreading rumors or conspiracy theories, a social media account with a history of spreading misinformation).
+            4 (Highly Questionable): Originates from a source known to be unreliable or deceptive (e.g., a known purveyor of fake news, a bot network, a source linked to disinformation campaigns).
+
+        - (micro factor 3) Evidence Verification: Does the claim have supporting evidence, or does its apparent truth rely solely on repetition? This is a critical check to avoid the "illusory truth effect." Score based on the following criteria:
+            0 (Strongly Supported): The claim is supported by robust evidence from multiple credible sources. There is a clear consensus among experts that the claim is accurate.
+            1 (Supported): The claim is supported by some evidence from credible sources, but there may be some caveats or limitations.
+            2 (Mixed Evidence): There is mixed evidence supporting and refuting the claim. The evidence may be inconclusive, or there may be conflicting studies.
+            3 (Unsupported): There is little or no credible evidence to support the claim. The available evidence suggests that the claim is likely false.
+            4 (Strongly Refuted): The claim is strongly refuted by credible evidence. There is a clear consensus among experts that the claim is false. Fact-checking websites have debunked the claim.
+
+    2.** Misleading Intentions **:
+        - (micro factor 1) Omission Checks: Does the content deliberately leave out crucial details that significantly alter the interpretation or perception of the information presented? Score based on the following criteria: 
+            0 (No Significant Omissions): No relevant details are omitted, or the omissions do not significantly affect the interpretation of the information.
+            1 (Minor Omissions): Minor details are omitted, but they have a limited impact on the overall understanding of the information.
+            2 (Moderate Omissions): Relevant details are omitted, leading to a slightly skewed or incomplete understanding of the information.
+            3 (Significant Omissions): Crucial details are omitted, significantly altering the interpretation of the information and potentially leading to inaccurate conclusions.
+            4 (Egregious Omissions): The content deliberately omits vital information to create a false or misleading narrative, with a high likelihood of deceiving the audience.
+
+        - (micro factor 2) Exaggeration Analysis: Does the content contain unsupported claims, exaggerations, or hyperbole that distort the truth or mislead the audience? Score based on the following criteria:
+            0 (No Exaggerations): The content contains no unsupported claims, exaggerations, or hyperbole.
+            1 (Minor Exaggerations): Minor exaggerations or hyperbole are present, but they do not significantly distort the truth or mislead the audience.
+            2 (Moderate Exaggerations): Some claims are exaggerated or presented without sufficient evidence, leading to a slightly distorted understanding of the information.
+            3 (Significant Exaggerations): Significant claims are exaggerated or presented without evidence, significantly distorting the truth and potentially misleading the audience.
+            4 (Gross Exaggerations): The content is filled with gross exaggerations, unsupported claims, and hyperbole, intended to deceive and manipulate the audience.
+
+	    - (micro factor 3) Target Audience Assessment: Does the content target vulnerable or impressionable groups (e.g., children, elderly, people with specific beliefs) with the apparent intention of misleading them? Score based on the following criteria:
+            0 (No Targeted Content): The content does not appear to be specifically targeted at any vulnerable or impressionable group.
+            1 (Minimal Targeting): The content may have some elements that appeal to a specific audience, but there is no clear intention to mislead them.
+            2 (Moderate Targeting): The content targets a specific audience and may contain some elements that could potentially mislead them.
+            3 (Significant Targeting): The content is clearly targeted at a vulnerable or impressionable group, with a moderate likelihood of misleading them.
+            4 (Exploitative Targeting): The content is explicitly designed to exploit the vulnerabilities of a specific group for malicious purposes, with a high likelihood of causing harm.
+
+    -------------------
+
+    ### Iterative Analysis Instructions:
+    Perform analysis over **three iterations**, refining the results in each pass:
+
+    1. **Iteration 1**:
+        - Conduct a preliminary analysis using the Factuality Factors, with your knowledge base.
+        - Identify potential areas of concern that warrant further investigation.
+        - Assign preliminary scores for each factor and provide explanations for the scores.
+        - Conclude with a preliminary **Truthfulness Score** (0 to 1, the lower the more truthful).
+
+    2. **Iteration 2**:
+        - Reflect on areas where the initial analysis missed nuances or misjudged factors.
+        - Refine the analysis with deeper insights from context and search results.
+        - Adjust scores for each factor and document improvements.
+        - Provide an updated **Truthfulness Score**.
+
+    3. **Iteration 3**:
+        - Conduct a final review focusing on comprehensiveness:
+        - Ensure that all areas with suspicion 
+        - Confirm that all gaps or omissions identified in earlier iterations are addressed.
+        - Include a summary highlighting key adjustments and final observations.
+        - Calculate a final **Truthfulness Score**, and provide a verdict using one of these sixth ordinal labels {“True”, “Mostly-True”, “Half-True”, “Barely-True”, “False”, “Pants on Fire”}.
+
+    -------------------
+
+    ### Output format for each iteration:
+    1. **Frequency Heuristics**:
+        - **Repetition Analysis**: [Your score]
+        - Explanation: [Explanation of the score]
+        - **Origin Tracing**: [Your score]
+        - Explanation: [Explanation of the score]
+        - **Evidence Verification**: [Your score]
+        - Explanation: [Explanation of the score]
+
+    2. **Misleading Intentions**:
+        - **Omission Checks**: [Your score]
+        - Explanation: [Explanation of the score]
+        - **Exaggeration Analysis**: [Your score]
+        - Explanation: [Explanation of the score]
+        - **Target Audience Assessment**: [Your score]
+        - Explanation: [Explanation of the score]
+
+    3. **Final Truthfulness Score**:
+        - Based on refined scores, calculate a final truthfulness score (0 to 1).
+        - Provide a summary explaining the final score and key observations.
+
+    -------------------
+
+    '''
+    prompt += f"Please refer to any context information and the prediction score from the classifier model to guide your analysis. The prediction score is: {predict_score}.\n\n"
+    prompt += f"Here is the news article: \n\n {input_text}\n\n"
     return prompt
 
 def get_top_100_statements(user_input):
@@ -647,12 +724,6 @@ def get_top_100_statements(user_input):
         else:
             statement_dic[statement] += 1   
     return statement_dic
-
-def combine_pdf_and_prompt(prompt: str, news_text: str) -> str:
-    """Combines the user's prompt with the extracted PDF text."""
-    if not news_text:
-        return prompt
-    return f"Prompt: {prompt}\n\nPDF Content: {news_text}"  # Combine entire text
 
 def chunk_news_text(news_text: str) -> list[str]:
     if not news_text:
@@ -686,13 +757,13 @@ def chunk_news_text(news_text: str) -> list[str]:
     return chunks
    
 # Sends API call to GenAI model with user input
-def call_api(input_text):
-    context = " "
+def call_api(context, input_text):
     # Add context to the prompt
     full_prompt = f"Context: {context}\n\nUser: {input_text}"
     response = chat_session.send_message(full_prompt)
     # time.sleep(0.5)
     # yield response.candidates[0].content.parts[0].text
+    print(response.parts[0].text[:100])
     yield response.parts[0].text
 
 def call_function(input_text):
@@ -927,10 +998,12 @@ def obtain_model_accuracy(test_size=20):
     for i in range(1, 4):
         prompt += f"Iteration {i}: Evaluate the text based on the following objectives and also on microfactors:\n"
         prompt += "\nFactuality Factor 1: Frequency Heuristic:\n"
-        for fh in frequency_heuristic:
+        # Fix this line when need to use
+        for fh in ['frequency_heuristic']:
             prompt += f"{fh['description']}: {fh['details']}\n"
         prompt += "\nFactuality Factor 2: Misleading Intentions:\n"
-        for mi in misleading_intentions:
+        # Fix this line when need to use
+        for mi in ['misleading_intentions']:
             prompt += f"{mi['description']}: {mi['details']}\n"
         prompt += "\nDo not provide any explanation and only give the final output.\n\n"
     prompt += "Final output: For each of the statements, return an exact numeric veracity score for the text, and provide a matching label out of these six [true, mostly-true, half-true, barely-true, false, pants-fire]. Return the labels within <> markers.\n"
