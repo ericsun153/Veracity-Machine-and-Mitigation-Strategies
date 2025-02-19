@@ -51,7 +51,6 @@ def tool_config_from_mode(mode: str, fns: Iterable[str] = ()):
     )
 
 chat_session = model.start_chat(history=[])
-tool_config = tool_config_from_mode("auto")
 
 # Global variables
 _prediction_engine = None
@@ -338,7 +337,7 @@ def handle_url(e: me.InputEnterEvent):
 
     if is_valid_url(e.value):
         try:
-            state.news_text = scrape_news_text(e.value)
+            state.news_text = preprocess_news_text(scrape_news_text(e.value))
         except Exception as ex:
             state.news_text = f"Failed to scrape the website: {str(ex)}"
     else:
@@ -370,6 +369,33 @@ def extract_text_from_pdf(file: me.UploadedFile):
 def handle_manual_input(e: me.InputEnterEvent):
     state = me.state(State)
     state.news_text = e.value
+
+# Preprocess the news text by chunking it into logical sections and extracting meta data
+def preprocess_news_text(news_text):
+    state = me.state(State)
+    if not news_text:
+        return ""
+        
+    prompt = f"""Preprocess the following news article for later analysis. 
+    First, extract a list of metadata elements <list> [title, author, publication source] <\list> and enclose the elements with their respective tags, for example <publication source> CNN <\publication source>.
+    Next, split the text into 1-5 logical chunks of reasonable size, number of chunks depends on length and complexity of overall article. Enclose each chunk with <chunk> and <\chunk> tags.
+    Preserve the original text and do not alter main article. Return ONLY the required material with no additional explanation.
+    
+    Output format:
+    <title> [Title of the article] <\ title>
+    <author> [Author of the article] <\ author>
+    <publication source> [Source of the article] <\publication source>
+    <chunk 1> <\chunk 1>
+    ...
+
+    Text to split:
+    {news_text}
+    """
+    print("Calling chunking send_message")
+    chunk_text = chat_session.send_message(prompt, tool_config=tool_config_from_mode("none"))
+    print("Returned chunking output")
+
+    return chunk_text.text
 
 # Display the news input
 def display_news_article():
@@ -574,18 +600,6 @@ def convert_statement_to_series(statement):
 # Fractal COT & Function Call
 
 def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None, iterations=3, regular_CoT=False):
-    # Define the complex objective functions
-    frequency_heuristic = [
-        {"description": "Micro Factor 1: Repetition Analysis", "details": "Analyzing wider coverage helps assess consensus. If multiple independent sources confirm manipulation, it strengthens the claim. Even widespread agreement about deceptive editing wouldn't automatically justify government action against CBS. The First Amendment protects against content-based restrictions."},
-        {"description": "Micro Factor 2: Origin Tracing", "details": "Confirmed sources are critical. Discrepancies between reporting and original sources raise red flags."},
-        {"description": "Micro Factor 3: Evidence Verification", "details": "Expert analysis is the most crucial element. Expert opinions on video manipulation are essential. Expert testimony would be necessary for any legal action alleging manipulation, though such a case would face significant First Amendment hurdles."}
-    ]
-
-    misleading_intentions = [
-        {"description": "Micro Factor 1: Omission Checks", "details": "Assess the omissions' impact. Did they distort the message? Did they create a demonstrably false representation? (Proving this is difficult)."},
-        {"description": "Micro Factor 2: Exaggeration Analysis", "details": "Evaluate the 'scandal' claim. Does the evidence support it, or is it hyperbole? Does the situation, even if accurately reported, justify calls for license revocation under existing legal and constitutional frameworks?"},
-        {"description": "Micro Factor 3: Target Audience Assessment", "details": "Analyze audience manipulation. Identify targeting tactics (language, framing). While such tactics can be ethically questionable, they are generally protected speech unless they involve provable falsehoods and meet the very high legal bar for defamation or incitement."}
-    ]
     # Only use regular CoT prompting for testing
     if regular_CoT:
         ffs = ['Frequency Heuristic', 'Misleading Intentions']
@@ -724,37 +738,6 @@ def get_top_100_statements(user_input):
         else:
             statement_dic[statement] += 1   
     return statement_dic
-
-def chunk_news_text(news_text: str) -> list[str]:
-    if not news_text:
-        return []
-        
-    prompt = """Split the following text into logical chunks (max 10 chunks) of reasonable size. 
-    Preserve complete paragraphs and maintain context. Return ONLY the chunks as a numbered list, with no additional text.
-    Format each chunk like:
-    1. [chunk text]
-    2. [chunk text]
-    etc.
-
-    Text to split:
-    {text}
-    """
-
-    response = chat_session.send_message(prompt.format(text=news_text))
-    chunks_text = response.text.strip()
-    
-    # Split on numbered lines and clean up
-    chunks = []
-    for line in chunks_text.split('\n'):
-        # Skip empty lines
-        if not line.strip():
-            continue
-        # Remove the number prefix and clean whitespace
-        chunk = line.split('.', 1)[-1].strip()
-        if chunk:
-            chunks.append(chunk)
-            
-    return chunks
    
 # Sends API call to GenAI model with user input
 def call_api(context, input_text):
@@ -770,7 +753,7 @@ def call_function(input_text):
     context = " "
     # Add context to the prompt
     full_prompt = f"Context: {context}\n\nUser: {input_text}"
-    response = chat_session.send_message(full_prompt, tool_config=tool_config)
+    response = chat_session.send_message(full_prompt, tool_config=tool_config_from_mode("auto"))
     
     response_text = ""
     # _function_calling_outputs = ""
@@ -999,11 +982,23 @@ def obtain_model_accuracy(test_size=20):
         prompt += f"Iteration {i}: Evaluate the text based on the following objectives and also on microfactors:\n"
         prompt += "\nFactuality Factor 1: Frequency Heuristic:\n"
         # Fix this line when need to use
-        for fh in ['frequency_heuristic']:
+        # Define the complex objective functions
+        frequency_heuristic = [
+            {"description": "Micro Factor 1: Repetition Analysis", "details": "Analyzing wider coverage helps assess consensus. If multiple independent sources confirm manipulation, it strengthens the claim. Even widespread agreement about deceptive editing wouldn't automatically justify government action against CBS. The First Amendment protects against content-based restrictions."},
+            {"description": "Micro Factor 2: Origin Tracing", "details": "Confirmed sources are critical. Discrepancies between reporting and original sources raise red flags."},
+            {"description": "Micro Factor 3: Evidence Verification", "details": "Expert analysis is the most crucial element. Expert opinions on video manipulation are essential. Expert testimony would be necessary for any legal action alleging manipulation, though such a case would face significant First Amendment hurdles."}
+        ]
+
+        misleading_intentions = [
+            {"description": "Micro Factor 1: Omission Checks", "details": "Assess the omissions' impact. Did they distort the message? Did they create a demonstrably false representation? (Proving this is difficult)."},
+            {"description": "Micro Factor 2: Exaggeration Analysis", "details": "Evaluate the 'scandal' claim. Does the evidence support it, or is it hyperbole? Does the situation, even if accurately reported, justify calls for license revocation under existing legal and constitutional frameworks?"},
+            {"description": "Micro Factor 3: Target Audience Assessment", "details": "Analyze audience manipulation. Identify targeting tactics (language, framing). While such tactics can be ethically questionable, they are generally protected speech unless they involve provable falsehoods and meet the very high legal bar for defamation or incitement."}
+        ]
+        for fh in frequency_heuristic:
             prompt += f"{fh['description']}: {fh['details']}\n"
         prompt += "\nFactuality Factor 2: Misleading Intentions:\n"
         # Fix this line when need to use
-        for mi in ['misleading_intentions']:
+        for mi in misleading_intentions:
             prompt += f"{mi['description']}: {mi['details']}\n"
         prompt += "\nDo not provide any explanation and only give the final output.\n\n"
     prompt += "Final output: For each of the statements, return an exact numeric veracity score for the text, and provide a matching label out of these six [true, mostly-true, half-true, barely-true, false, pants-fire]. Return the labels within <> markers.\n"
