@@ -39,7 +39,7 @@ generation_config = {
 }
 obj_funcs = [repetition_analysis, origin_tracing, evidence_verification, omission_checks, exaggeration_analysis, target_audience_assessment]
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-pro-002",
+    model_name="gemini-2.0-flash-001",
     generation_config=generation_config,
     tools=obj_funcs,
 )
@@ -610,114 +610,124 @@ def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None
         return prompt
     
     # Fractal Chain of Thought Prompting with Objective Functions
-    prompt = '''
+    prompt = f'''
     You are an expert at identifying misinformation and disinformation within news articles, such as bias, manipulative tactics, or false information. You will perform all analysis based on supporting evidence either from your existing knowledge or additional context. All fact-checking must be thorough and accurate. 
-    
+
     ### Objective:
-    Analyze the provided text using the following **Factuality Factors** to detect disinformation or misinformation effectively. Perform iterative analysis across three iterations, refining the results in each pass.
-    
-    -------------------
+    Analyze the provided news article content using the following **Factuality Factors** to detect disinformation or misinformation effectively. Your analysis should be as factual, logical, and reasonable as possible, while taking into account additional information.
+
+    ------------
 
     ### Factuality Factors:
     1.** Frequency Heuristics **: 
-        - (micro factor 1) Repetition Analysis: How frequently and widely is the claim repeated across different platforms and sources? Score based on the following criteria:
-            0 (Rare): Claim appears very infrequently and in limited locations.
-            1 (Limited): Claim appears in a few sources, with limited reach, and shows no clear pattern of spread.
-            2 (Moderate): Claim appears in a moderate number of sources, shows some reach, and may have some periods of increased activity.
-            3 (Frequent): Claim appears frequently, has significant reach, and shows a clear pattern of spread across multiple platforms.
-            4 (Widespread): Claim appears extremely frequently, has very high reach, is actively spreading on multiple platforms, and may be trending.
+    - (micro factor 1) Repetition Analysis: How frequently and widely is the claim repeated across different platforms and sources? Score based on the following criteria:
+    0 (Rare): Claim appears very infrequently and in limited locations.
+    1 (Limited): Claim appears in a few sources, with limited reach, and shows no clear pattern of spread.
+    2 (Moderate): Claim appears in a moderate number of sources, shows some reach, and may have some periods of increased activity.
+    3 (Frequent): Claim appears frequently, has significant reach, and shows a clear pattern of spread across multiple platforms.
+    4 (Widespread): Claim appears extremely frequently, has very high reach, is actively spreading on multiple platforms, and may be trending.
 
-	    - (micro factor 2) Origin Tracing: Where did the frequently repeated information originate? Is it from a credible source, or is it from a questionable origin (e.g., bot network, conspiracy website)? Score based on the following criteria:
-            0 (Highly Credible): Originates from a highly credible and reliable source (e.g., a reputable news agency with a history of accurate reporting, a peer-reviewed scientific journal).
-            1 (Credible): Originates from a generally credible source (e.g., established news organization, government agency), but there might be some caveats (e.g., known biases).
-            2 (Neutral): Originates from a source with a neutral reputation or a source where credibility is difficult to assess (e.g., a blog with no clear editorial standards, a social media post from an individual with no established expertise).
-            3 (Questionable): Originates from a source with a questionable reputation (e.g., a website known for spreading rumors or conspiracy theories, a social media account with a history of spreading misinformation).
-            4 (Highly Questionable): Originates from a source known to be unreliable or deceptive (e.g., a known purveyor of fake news, a bot network, a source linked to disinformation campaigns).
+    - (micro factor 2) Origin Tracing: Where did the frequently repeated information originate? Is it from a credible source, or is it from a questionable origin (e.g., bot network, conspiracy website)? Score based on the following criteria:
+    0 (Highly Credible): Originates from a highly credible and reliable source (e.g., a reputable news agency with a history of accurate reporting, a peer-reviewed scientific journal).
+    1 (Credible): Originates from a generally credible source (e.g., established news organization, government agency), but there might be some caveats (e.g., known biases).
+    2 (Neutral): Originates from a source with a neutral reputation or a source where credibility is difficult to assess (e.g., a blog with no clear editorial standards, a social media post from an individual with no established expertise).
+    3 (Questionable): Originates from a source with a questionable reputation (e.g., a website known for spreading rumors or conspiracy theories, a social media account with a history of spreading misinformation).
+    4 (Highly Questionable): Originates from a source known to be unreliable or deceptive (e.g., a known purveyor of fake news, a bot network, a source linked to disinformation campaigns).
 
-        - (micro factor 3) Evidence Verification: Does the claim have supporting evidence, or does its apparent truth rely solely on repetition? This is a critical check to avoid the "illusory truth effect." Score based on the following criteria:
-            0 (Strongly Supported): The claim is supported by robust evidence from multiple credible sources. There is a clear consensus among experts that the claim is accurate.
-            1 (Supported): The claim is supported by some evidence from credible sources, but there may be some caveats or limitations.
-            2 (Mixed Evidence): There is mixed evidence supporting and refuting the claim. The evidence may be inconclusive, or there may be conflicting studies.
-            3 (Unsupported): There is little or no credible evidence to support the claim. The available evidence suggests that the claim is likely false.
-            4 (Strongly Refuted): The claim is strongly refuted by credible evidence. There is a clear consensus among experts that the claim is false. Fact-checking websites have debunked the claim.
+    - (micro factor 3) Evidence Verification: Does the claim have supporting evidence, or does its apparent truth rely solely on repetition? This is a critical check to avoid the "illusory truth effect." Score based on the following criteria:
+    0 (Strongly Supported): The claim is supported by robust evidence from multiple credible sources. There is a clear consensus among experts that the claim is accurate.
+    1 (Supported): The claim is supported by some evidence from credible sources, but there may be some caveats or limitations.
+    2 (Mixed Evidence): There is mixed evidence supporting and refuting the claim. The evidence may be inconclusive, or there may be conflicting studies.
+    3 (Unsupported): There is little or no credible evidence to support the claim. The available evidence suggests that the claim is likely false.
+    4 (Strongly Refuted): The claim is strongly refuted by credible evidence. There is a clear consensus among experts that the claim is false. Fact-checking websites have debunked the claim.
 
     2.** Misleading Intentions **:
-        - (micro factor 1) Omission Checks: Does the content deliberately leave out crucial details that significantly alter the interpretation or perception of the information presented? Score based on the following criteria: 
-            0 (No Significant Omissions): No relevant details are omitted, or the omissions do not significantly affect the interpretation of the information.
-            1 (Minor Omissions): Minor details are omitted, but they have a limited impact on the overall understanding of the information.
-            2 (Moderate Omissions): Relevant details are omitted, leading to a slightly skewed or incomplete understanding of the information.
-            3 (Significant Omissions): Crucial details are omitted, significantly altering the interpretation of the information and potentially leading to inaccurate conclusions.
-            4 (Egregious Omissions): The content deliberately omits vital information to create a false or misleading narrative, with a high likelihood of deceiving the audience.
+    - (micro factor 1) Omission Checks: Does the content deliberately leave out crucial details that significantly alter the interpretation or perception of the information presented? Score based on the following criteria: 
+    0 (No Significant Omissions): No relevant details are omitted, or the omissions do not significantly affect the interpretation of the information.
+    1 (Minor Omissions): Minor details are omitted, but they have a limited impact on the overall understanding of the information.
+    2 (Moderate Omissions): Relevant details are omitted, leading to a slightly skewed or incomplete understanding of the information.
+    3 (Significant Omissions): Crucial details are omitted, significantly altering the interpretation of the information and potentially leading to inaccurate conclusions.
+    4 (Egregious Omissions): The content deliberately omits vital information to create a false or misleading narrative, with a high likelihood of deceiving the audience.
 
-        - (micro factor 2) Exaggeration Analysis: Does the content contain unsupported claims, exaggerations, or hyperbole that distort the truth or mislead the audience? Score based on the following criteria:
-            0 (No Exaggerations): The content contains no unsupported claims, exaggerations, or hyperbole.
-            1 (Minor Exaggerations): Minor exaggerations or hyperbole are present, but they do not significantly distort the truth or mislead the audience.
-            2 (Moderate Exaggerations): Some claims are exaggerated or presented without sufficient evidence, leading to a slightly distorted understanding of the information.
-            3 (Significant Exaggerations): Significant claims are exaggerated or presented without evidence, significantly distorting the truth and potentially misleading the audience.
-            4 (Gross Exaggerations): The content is filled with gross exaggerations, unsupported claims, and hyperbole, intended to deceive and manipulate the audience.
+    - (micro factor 2) Exaggeration Analysis: Does the content contain unsupported claims, exaggerations, or hyperbole that distort the truth or mislead the audience? Score based on the following criteria:
+    0 (No Exaggerations): The content contains no unsupported claims, exaggerations, or hyperbole.
+    1 (Minor Exaggerations): Minor exaggerations or hyperbole are present, but they do not significantly distort the truth or mislead the audience.
+    2 (Moderate Exaggerations): Some claims are exaggerated or presented without sufficient evidence, leading to a slightly distorted understanding of the information.
+    3 (Significant Exaggerations): Significant claims are exaggerated or presented without evidence, significantly distorting the truth and potentially misleading the audience.
+    4 (Gross Exaggerations): The content is filled with gross exaggerations, unsupported claims, and hyperbole, intended to deceive and manipulate the audience.
 
-	    - (micro factor 3) Target Audience Assessment: Does the content target vulnerable or impressionable groups (e.g., children, elderly, people with specific beliefs) with the apparent intention of misleading them? Score based on the following criteria:
-            0 (No Targeted Content): The content does not appear to be specifically targeted at any vulnerable or impressionable group.
-            1 (Minimal Targeting): The content may have some elements that appeal to a specific audience, but there is no clear intention to mislead them.
-            2 (Moderate Targeting): The content targets a specific audience and may contain some elements that could potentially mislead them.
-            3 (Significant Targeting): The content is clearly targeted at a vulnerable or impressionable group, with a moderate likelihood of misleading them.
-            4 (Exploitative Targeting): The content is explicitly designed to exploit the vulnerabilities of a specific group for malicious purposes, with a high likelihood of causing harm.
+    - (micro factor 3) Target Audience Assessment: Does the content target vulnerable or impressionable groups (e.g., children, elderly, people with specific beliefs) with the apparent intention of misleading them? Score based on the following criteria:
+    0 (No Targeted Content): The content does not appear to be specifically targeted at any vulnerable or impressionable group.
+    1 (Minimal Targeting): The content may have some elements that appeal to a specific audience, but there is no clear intention to mislead them.
+    2 (Moderate Targeting): The content targets a specific audience and may contain some elements that could potentially mislead them.
+    3 (Significant Targeting): The content is clearly targeted at a vulnerable or impressionable group, with a moderate likelihood of misleading them.
+    4 (Exploitative Targeting): The content is explicitly designed to exploit the vulnerabilities of a specific group for malicious purposes, with a high likelihood of causing harm.
 
-    -------------------
-    '''
-    prompt += f"### Iterative Analysis Instructions:
-    Perform analysis over **{iterations} iterations**, refining the results in each pass:"
-    prompt += '''
+    ------------
+
+    ### Iterative Analysis Instructions:
+    Perform analysis over **{iterations} iterations**, refining the results in each pass:
     1. **Iteration 1**:
-        - Conduct a preliminary analysis using the Factuality Factors, with your knowledge base.
-        - Identify potential areas of concern that warrant further investigation.
-        - Assign preliminary scores for each factor and provide explanations for the scores.
-        - Conclude with a preliminary **Truthfulness Score** (0 to 1, the lower the more truthful).
+    - Conduct a preliminary analysis using the Factuality Factors, with your knowledge base.
+    - Identify potential areas of concern that warrant further investigation.
+    - Assign preliminary scores for each factor and provide explanations for the scores.
+    - Conclude with a preliminary **Truthfulness Score** between range [0, 1] (the higher the more truthful, this scale is different from the factor scores). 
 
     2. **Iteration 2**:
-        - Reflect on areas where the initial analysis missed nuances or misjudged factors.
-        - Refine the analysis with deeper insights from context and search results.
-        - Adjust scores for each factor and document improvements.
-        - Provide an updated **Truthfulness Score**.
+    - Reflect on areas where the initial analysis missed nuances or misjudged factors.
+    - Refine the analysis with deeper insights from context and search results.
+    - Adjust scores for each factor and document improvements, and if score has changed, explain the reason for the change.
+    - Provide an updated **Truthfulness Score**.
 
     3. **Iteration 3**:
-        - Conduct a final review focusing on comprehensiveness:
-        - Ensure that all areas with suspicion 
-        - Confirm that all gaps or omissions identified in earlier iterations are addressed.
-        - Include a summary highlighting key adjustments and final observations.
-        - Calculate a final **Truthfulness Score**, and provide a verdict using one of these sixth ordinal labels {“True”, “Mostly-True”, “Half-True”, “Barely-True”, “False”, “Pants on Fire”}.
+    - Conduct a final review focusing on comprehensiveness:
+    - Ensure that all areas with suspicion have been eliminated through fact checking with your database.
+    - Confirm that all gaps or omissions identified in earlier iterations are addressed.
+    - Include a summary highlighting key adjustments and final observations.
+    - Calculate a final **Truthfulness Score**, and provide a verdict using one of these six ordinal labels, they should closely match the truthfulness score you've derived above: <labels> “True”: 0.90-1, “Mostly-True”: 0.6-0.9, “Half-True”: 0.4-0.6, “Barely-True”: 0.25-0.4, “False”: 0.1-0.25, “Pants on Fire”: 0-0.1 <\labels>
 
-    -------------------
+    ** Important Note **
+    Consistency check: All of the scoring rubrics are provided in the same scale, meaning the larger the score, the more untruthful the article is for this factor. Ensure that all of your scores make sense on their individual scales based on your reasoning, as well as their combined truthfulness score at the end of each iteration. For example, if one of your factor scores have increased, meaning you found the article to be less truthful, then the overall truthfulness score should decrease during that iteration. Vice versa. The degree of influence on the overall score depends on the significance of the individual factors, and the weights should be determined by you. Use this equation for calculating truthfulness score: 
+    <equation> Truthfulness score = 1/(1 + w_0 * Score(Repetition Analysis) + w_1 * Score(Origin Tracing) + w_2 * Score(Evidence Verification) + w_3 * Score(Omission Check) + w_4 * Score(Exaggeration Analysis) + w_5 * Score(Target Audience Assessment)) <\equation>
+    
+    ------------
 
     ### Output format for each iteration:
     1. **Frequency Heuristics**:
-        - **Repetition Analysis**: [Your score]
-        - Explanation: [Explanation of the score]
-        - **Origin Tracing**: [Your score]
-        - Explanation: [Explanation of the score]
-        - **Evidence Verification**: [Your score]
-        - Explanation: [Explanation of the score]
+    - **Repetition Analysis**: [Your score]
+    - Explanation: [Explanation of the score]
+    - **Origin Tracing**: [Your score]
+    - Explanation: [Explanation of the score]
+    - **Evidence Verification**: [Your score]
+    - Explanation: [Explanation of the score]
 
     2. **Misleading Intentions**:
-        - **Omission Checks**: [Your score]
-        - Explanation: [Explanation of the score]
-        - **Exaggeration Analysis**: [Your score]
-        - Explanation: [Explanation of the score]
-        - **Target Audience Assessment**: [Your score]
-        - Explanation: [Explanation of the score]
+    - **Omission Checks**: [Your score]
+    - Explanation: [Explanation of the score]
+    - **Exaggeration Analysis**: [Your score]
+    - Explanation: [Explanation of the score]
+    - **Target Audience Assessment**: [Your score]
+    - Explanation: [Explanation of the score]
 
     3. **Final Truthfulness Score**:
-        - Based on refined scores, calculate a final truthfulness score (0 to 1).
-        - Provide a summary explaining the final score and key observations.
+    - Based on refined scores, calculate a final truthfulness score (0 to 1).
+    - Provide a summary explaining the final score and key observations.
 
-    -------------------
+    ------------
+
+    ### Factual Additional Information:
+    All of these additional information should be used to guide your analysis:
+    - **Predictive Classification Model**: The overall truthfulness label (true, mostly-true, half-true, barely-true, false, pants-fire) predicted using a classifier model. <prediction label> {predict_score} <\ prediction label>
+    - **Related Search Results**: Information retrieved from online sources related to the news article. <online search> {_related_search_results} <\ online search>
+    - **Function Calling Outputs**: Based on the news article, different factuality scores are examined utilizing separate function calling and these are the results for different factors. <function calling> {function_calling_outputs} <\ function calling>
+    - **Retrieval-augmented Generation**: Here is a list of the top 100 related news statements from the LiarPLUS dataset, a collection of ground truths from PolitiFact. <100 statements> {get_top_100_statements(input_text)} <\ 100 statements>
+
+    ------------
+
+    ### News Article:
+    {input_text}
 
     '''
-    prompt += f'\n\n RAG:\n Here, out of six potential labels (true, mostly-true, half-true, barely-true, false, pants-fire), this is the truthfulness label predicted using a classifier model: {predict_score}.\n These are the top 100 related statement in LiarPLUS dataset that related to this news article: {get_top_100_statements(input_text)}.\n'
-    prompt += f'Here is some additional information that has been searched from internet: {_related_search_results}.\n'
-    prompt += f'Based on the news article, different factuality scores are examined utilizing function calling and these are the results for different factors, take tehm into account for evaluation:{function_calling_outputs}.\n'
-    prompt += f"Please refer to any context information and the prediction score from the classifier model to guide your analysis. The prediction score is: {predict_score}.\n\n"
-    prompt += f"Here is the news article: \n\n {input_text}\n\n"
     return prompt
 
 def get_top_100_statements(user_input):
