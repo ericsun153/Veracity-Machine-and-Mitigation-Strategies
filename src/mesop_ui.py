@@ -664,10 +664,10 @@ def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None
             4 (Exploitative Targeting): The content is explicitly designed to exploit the vulnerabilities of a specific group for malicious purposes, with a high likelihood of causing harm.
 
     -------------------
-
-    ### Iterative Analysis Instructions:
-    Perform analysis over **three iterations**, refining the results in each pass:
-
+    '''
+    prompt += f"### Iterative Analysis Instructions:
+    Perform analysis over **{iterations} iterations**, refining the results in each pass:"
+    prompt += '''
     1. **Iteration 1**:
         - Conduct a preliminary analysis using the Factuality Factors, with your knowledge base.
         - Identify potential areas of concern that warrant further investigation.
@@ -713,6 +713,9 @@ def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None
     -------------------
 
     '''
+    prompt += f'\n\n RAG:\n Here, out of six potential labels (true, mostly-true, half-true, barely-true, false, pants-fire), this is the truthfulness label predicted using a classifier model: {predict_score}.\n These are the top 100 related statement in LiarPLUS dataset that related to this news article: {get_top_100_statements(input_text)}.\n'
+    prompt += f'Here is some additional information that has been searched from internet: {_related_search_results}.\n'
+    prompt += f'Based on the news article, different factuality scores are examined utilizing function calling and these are the results for different factors, take tehm into account for evaluation:{function_calling_outputs}.\n'
     prompt += f"Please refer to any context information and the prediction score from the classifier model to guide your analysis. The prediction score is: {predict_score}.\n\n"
     prompt += f"Here is the news article: \n\n {input_text}\n\n"
     return prompt
