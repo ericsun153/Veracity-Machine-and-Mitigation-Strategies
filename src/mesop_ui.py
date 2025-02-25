@@ -6,6 +6,7 @@ import pandas as pd
 import google.generativeai as genai
 from google.generativeai.types import content_types
 from collections.abc import Iterable
+from collections import defaultdict
 import chromadb
 import PyPDF2
 import http.client
@@ -67,6 +68,9 @@ class State:
     db_input: str = ""
     db_output: str = ""
     file: me.UploadedFile | None = None
+    news_title: str = ""
+    news_author: str = ""
+    nes_source: str = ""
     news_text: str = ""
     initialized: bool = False
     in_building: bool = False
@@ -143,8 +147,8 @@ def page():
                 news_input()
                 display_news_article()
                 search_input()
-                search_output()
                 chat_input()
+                search_display()
                 output()
             footer()
 
@@ -326,14 +330,8 @@ def handle_url(e: me.InputEnterEvent):
         news_text = '\n'.join([para.get_text() for para in paragraphs])
         # Extract title
         title = soup.find('h1').get_text() if soup.find('h1') else "No title found"
-        # Extract authors
-        author_text = ""
-        content = response.content.decode('utf-8')
-        by_index = content.find("By ")
-        if by_index != -1:
-            author_text = content[by_index:by_index + 100]
             
-        return f"Title: {title}\n\nAuthors: {author_text}\n\n{news_text}"
+        return f"Title: {title}\n\n{news_text}"
 
     if is_valid_url(e.value):
         try:
@@ -364,11 +362,24 @@ def extract_text_from_pdf(file: me.UploadedFile):
     for page_num in range(len(pdf_reader.pages)):
         page = pdf_reader.pages[page_num]
         extracted_text += page.extract_text()
-    state.news_text = extracted_text  # Store extracted PDF text in state
+    state.news_text = preprocess_news_text(extracted_text)  # Store extracted PDF text in state
 
 def handle_manual_input(e: me.InputEnterEvent):
     state = me.state(State)
-    state.news_text = e.value
+    state.news_text = preprocess_news_text(e.value)
+
+# Parse preprocessing outputs
+def parse_tagged_string(text):
+    tag_pattern = re.compile(r'<(.*?)>(.*?)</.*?>', re.DOTALL)
+    parsed_data = defaultdict(list)
+    
+    for match in tag_pattern.finditer(text):
+        tag, content = match.groups()
+        content = content.strip()
+
+        parsed_data[tag].append(content)
+    print(parsed_data.keys())
+    return {key: value if len(value) > 1 else value[0] for key, value in parsed_data.items()}
 
 # Preprocess the news text by chunking it into logical sections and extracting meta data
 def preprocess_news_text(news_text):
@@ -377,15 +388,17 @@ def preprocess_news_text(news_text):
         return ""
         
     prompt = f"""Preprocess the following news article for later analysis. 
-    First, extract a list of metadata elements <list> [title, author, publication source] <\list> and enclose the elements with their respective tags, for example <publication source> CNN <\publication source>.
-    Next, split the text into 1-5 logical chunks of reasonable size, number of chunks depends on length and complexity of overall article. Enclose each chunk with <chunk> and <\chunk> tags.
+    First, extract a list of metadata elements <list> [title, author, publication source] </list> and enclose the elements with their respective tags, for example <publication source> CNN </publication source>.
+    Next, split the text into 1-5 logical chunks of reasonable size, number of chunks depends on length and complexity of overall article. Enclose each chunk with <chunk> and </chunk> tags.
+    Lastly, to prepare this news article for analysis, give me 1 set of key words used for online searches to find related current affairs or context. This set of keywords should be extremely pertinent to the subject matter of the article, and the search results should fill in gaps in your latest knowledge. Examples key words: US tariff on Canada and Mexico.
     Preserve the original text and do not alter main article. Return ONLY the required material with no additional explanation.
     
     Output format:
-    <title> [Title of the article] <\ title>
-    <author> [Author of the article] <\ author>
-    <publication source> [Source of the article] <\publication source>
-    <chunk 1> <\chunk 1>
+    <title> [Title of the article] </title> <br>
+    <author> [Author of the article] </author> <br>
+    <publication source> [Source of the article] </publication source> <br>
+    <search keywords> [Keywords for online search] </search keywords> <br>
+    <chunk> </chunk> <br>
     ...
 
     Text to split:
@@ -394,6 +407,15 @@ def preprocess_news_text(news_text):
     print("Calling chunking send_message")
     chunk_text = chat_session.send_message(prompt, tool_config=tool_config_from_mode("none"))
     print("Returned chunking output")
+
+    # Parse the tagged string
+    print(chunk_text.text)
+    parsed_data = parse_tagged_string(chunk_text.text)
+    state.news_title = parsed_data['title']
+    state.news_author = parsed_data['author']
+    state.news_source = parsed_data['publication source']
+    state.search_input_text = parsed_data['search keywords']
+    state.news_text = parsed_data['chunk']
 
     return chunk_text.text
 
@@ -441,11 +463,14 @@ def search_textarea_on_blur(e: me.InputBlurEvent):
 
 # Initiate the search process 
 def click_search_send(e: me.ClickEvent):
+    yield from initiate_search()
+
+def initiate_search():
     global _related_search_results
     state = me.state(State)
     if not state.search_input_text.strip():
         return
-    
+
     state.in_progress = True  # Start spinner for progress indication
     user_prompt = state.search_input_text
     state.search_display = "Searching for results...\n"
@@ -453,7 +478,7 @@ def click_search_send(e: me.ClickEvent):
 
     # Conduct the web search
     search_results = web_search(user_prompt)
-    
+
     # Format the search results for display
     if search_results:
         # Rough parse of search results
@@ -466,7 +491,7 @@ def click_search_send(e: me.ClickEvent):
             state.search_output['knowledge_graph'] = search_results['knowledgeGraph']
 
         _related_search_results = state.search_output
-        state.search_display = f"Search Results for '{user_prompt}':\n\n" + format_search_results(state.search_output)
+        state.search_display = f"# Search Results for '{user_prompt}':\n\n" + format_search_results(state.search_output)
     else:
         state.search_display = "No results found for your query."
 
@@ -494,7 +519,6 @@ def format_search_results(results):
     search_display_text += "\n"
     return search_display_text
 
-
 def web_search(user_prompt):
     conn = http.client.HTTPSConnection("google.serper.dev")
     payload = json.dumps({
@@ -512,7 +536,7 @@ def web_search(user_prompt):
     
     return json.loads(search.decode('utf-8'))
 
-def search_output():
+def search_display():
     state = me.state(State)
     if state.search_display:
         with me.box(
@@ -521,6 +545,8 @@ def search_output():
                 padding=me.Padding.all(16),
                 border_radius=16,
                 margin=me.Margin(top=36),
+                max_height=400,
+                overflow="auto",
             )
         ):
             me.markdown(state.search_display)
@@ -535,7 +561,7 @@ def chat_input():
                 value=state.input,
                 autosize=True,
                 min_rows=4,
-                placeholder="Enter your customized prompt, or will do default FCOT if empty.",
+                placeholder="Enter any additional information or context if needed. Click send to generate an analysis.",
                 style=me.Style(padding=me.Padding(top=16, left=16), background="white", outline="none", width="100%", overflow_y="auto", border=me.Border.all(me.BorderSide(style="none"),),),
                 on_blur=textarea_on_blur,
             )
@@ -553,12 +579,13 @@ def initiate_analysis(e: me.ClickEvent):
 
     # Kickstart veracity analysis workflow
     if not state.input.strip():  # Check if input is empty or contains only whitespace
-        state.input = "Default input text here."  # Default FCT prompt if no input is provided
+        state.input = "User didn't provide more context."  # Default FCT prompt if no input is provided
         return
     
     state.in_progress = True
     yield
 
+    # Predictive model
     if _prediction_engine is None:
         train_predictive()
     predict_score = _prediction_engine.predict_new_example(convert_statement_to_series(state.news_text))['overall']
@@ -569,9 +596,20 @@ def initiate_analysis(e: me.ClickEvent):
     # RAG
     top_100_statements = get_top_100_statements(state.news_text)
 
+    # Search results
+    yield from initiate_search()
+    search_domain = state.search_display
+
     # Generate FCoT prompt
     context = " "
-    combined_input = generate_fct_prompt(state.news_text, predict_score, function_calling_outputs)
+    combined_input = generate_fct_prompt(
+        state.news_text, 
+        predict_score, 
+        search_result=search_domain,
+        function_calling_outputs=function_calling_outputs, 
+        rag = top_100_statements,
+        additional_info = state.input,
+    )
 
     for chunk in call_api(context, combined_input):
         state.output += chunk
@@ -598,8 +636,16 @@ def convert_statement_to_series(statement):
     return pd.Series(['','',subject, statement, speaker, speaker_title, state, party_aff,'0.0','0.0','0.0','0.0','0.0', context, ''])
 
 # Fractal COT & Function Call
-
-def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None, iterations=3, regular_CoT=False):
+def generate_fct_prompt(
+    input_text, 
+    predict_score, 
+    search_result=None,
+    function_calling_outputs=None, 
+    rag=None,
+    additional_info=None, 
+    iterations=3, 
+    regular_CoT=False,
+):
     # Only use regular CoT prompting for testing
     if regular_CoT:
         ffs = ['Frequency Heuristic', 'Misleading Intentions']
@@ -684,11 +730,11 @@ def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None
     - Ensure that all areas with suspicion have been eliminated through fact checking with your database.
     - Confirm that all gaps or omissions identified in earlier iterations are addressed.
     - Include a summary highlighting key adjustments and final observations.
-    - Calculate a final **Truthfulness Score**, and provide a verdict using one of these six ordinal labels, they should closely match the truthfulness score you've derived above: <labels> “True”: 0.90-1, “Mostly-True”: 0.6-0.9, “Half-True”: 0.4-0.6, “Barely-True”: 0.25-0.4, “False”: 0.1-0.25, “Pants on Fire”: 0-0.1 <\labels>
+    - Calculate a final **Truthfulness Score**, and provide a verdict using one of these six ordinal labels, they should closely match the truthfulness score you've derived above: <labels> “True”: 0.90-1, “Mostly-True”: 0.6-0.9, “Half-True”: 0.4-0.6, “Barely-True”: 0.25-0.4, “False”: 0.1-0.25, “Pants on Fire”: 0-0.1 </labels>
 
     ** Important Note **
     Consistency check: All of the scoring rubrics are provided in the same scale, meaning the larger the score, the more untruthful the article is for this factor. Ensure that all of your scores make sense on their individual scales based on your reasoning, as well as their combined truthfulness score at the end of each iteration. For example, if one of your factor scores have increased, meaning you found the article to be less truthful, then the overall truthfulness score should decrease during that iteration. Vice versa. The degree of influence on the overall score depends on the significance of the individual factors, and the weights should be determined by you. Use this equation for calculating truthfulness score: 
-    <equation> Truthfulness score = 1/(1 + w_0 * Score(Repetition Analysis) + w_1 * Score(Origin Tracing) + w_2 * Score(Evidence Verification) + w_3 * Score(Omission Check) + w_4 * Score(Exaggeration Analysis) + w_5 * Score(Target Audience Assessment)) <\equation>
+    <equation> Truthfulness score = 1/(1 + w_0 * Score(Repetition Analysis) + w_1 * Score(Origin Tracing) + w_2 * Score(Evidence Verification) + w_3 * Score(Omission Check) + w_4 * Score(Exaggeration Analysis) + w_5 * Score(Target Audience Assessment)) </equation>
     
     ------------
 
@@ -717,11 +763,12 @@ def generate_fct_prompt(input_text, predict_score, function_calling_outputs=None
 
     ### Factual Additional Information:
     All of these additional information should be used to guide your analysis:
-    - **Predictive Classification Model**: The overall truthfulness label (true, mostly-true, half-true, barely-true, false, pants-fire) predicted using a classifier model. <prediction label> {predict_score} <\ prediction label>
-    - **Related Search Results**: Information retrieved from online sources related to the news article. <online search> {_related_search_results} <\ online search>
-    - **Function Calling Outputs**: Based on the news article, different factuality scores are examined utilizing separate function calling and these are the results for different factors. <function calling> {function_calling_outputs} <\ function calling>
-    - **Retrieval-augmented Generation**: Here is a list of the top 100 related news statements from the LiarPLUS dataset, a collection of ground truths from PolitiFact. <100 statements> {get_top_100_statements(input_text)} <\ 100 statements>
-
+    - **Predictive Classification Model**: The overall truthfulness label (true, mostly-true, half-true, barely-true, false, pants-fire) predicted using a classifier model. <prediction label> {predict_score} </ prediction label>
+    - **Related Search Results**: Information retrieved from online sources related to the news article. <online search> {search_result} </ online search>
+    - **Function Calling Outputs**: Based on the news article, different factuality scores are examined utilizing separate function calling and these are the results for different factors. <function calling> {function_calling_outputs} </ function calling>
+    - **Retrieval-augmented Generation**: Here is a list of the top 100 related news statements from the LiarPLUS dataset, a collection of ground truths from PolitiFact. <100 statements> {rag} </ 100 statements>
+    - **User-provided Context**: Any additional context or information provided by the user. <additional context> {additional_info} </ additional context>
+    
     ------------
 
     ### News Article:
@@ -749,7 +796,7 @@ def get_top_100_statements(user_input):
         if statement not in statement_dic:
             statement_dic[statement] = 1
         else:
-            statement_dic[statement] += 1   
+            statement_dic[statement] += 1
     return statement_dic
    
 # Sends API call to GenAI model with user input
