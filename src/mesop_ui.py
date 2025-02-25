@@ -154,6 +154,7 @@ def page():
 
 ############################################ begin page elements ############################################
 def header_text():
+    state = me.state(State)
     with me.box(style=me.Style(padding=me.Padding(top=64, bottom=36))):
         me.text(
             "Veracity Machine",
@@ -166,9 +167,34 @@ def header_text():
         )
     with me.box(style=me.Style(padding=me.Padding(bottom=16))):
         me.text(
-            "Welcome to the Veracity Machine, a tool for analyzing the veracity of news articles.",
+            "Welcome to the Veracity Machine, a tool for analyzing the veracity of news articles. This tool uses a combination of predictive models, generative models, and external search functionality to analyze news articles for veracity.",
             style=me.Style(font_size=16)
         )
+
+    # API key input
+    with me.box(style=me.Style(padding=me.Padding(bottom=16))):
+        me.text(
+            "Enter your Google API key below, your API key needs to support Gemini 2.0 flash. If you don't have an API key, you can use the default key provided.",
+        )
+        me.input(
+            label="API key (leave empty if use default)", 
+            appearance="outline", 
+            on_blur=apikey_on_blur,
+            placeholder="",
+            style=me.Style(width=400, padding=me.Padding(top=8))
+        )
+
+    # FF table
+    with me.box(style=me.Style(padding=me.Padding(bottom=16))):
+        me.text("Factuality factors:")
+        state.factuality_factors = ["Echo Chamber", "Education", "Event Coverage", "Frequency Heuristic", "Location", "Malicious Account", "Misleading Intention", "News Coverage"]
+        me.markdown(" | ".join(state.factuality_factors))
+
+def apikey_on_blur(e: me.InputBlurEvent):
+    if e.value:
+        genai.configure(api_key=e.value)
+    else:
+        genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
 
 # Toggles for selecting the features to include in the analysis
 def toggles():
@@ -186,7 +212,7 @@ def toggles():
             style=me.Style(margin=me.Margin(right=64))
         )
         me.checkbox(
-            "Generative Model (gemini-1.5-pro-002)", 
+            "Generative Model (gemini-2.0-flash-001)", 
             checked=state.use_gen_model, 
             on_change=on_change_checkbox,
             key='gen_model',
@@ -208,18 +234,7 @@ def toggles():
         )
 
     with me.box(style=me.Style(padding=me.Padding(bottom=16))):
-        me.text("3. Factuality factors (don't have toggle capability in PredAI):")
-        state.factuality_factors = ["Echo Chamber", "Education", "Event Coverage", "Frequency Heuristic", "Location", "Malicious Account", "Misleading Intention", "News Coverage"]
-        for ff in state.factuality_factors:
-            me.checkbox(
-                ff,
-                checked=True,
-                disabled=True, # disabled until predAI can handle this
-                style=me.Style(margin=me.Margin(right=64))
-            )
-
-    with me.box(style=me.Style(padding=me.Padding(bottom=16))):
-        me.text("4. Choose additional functions:")
+        me.text("3. Choose additional functions:")
         me.checkbox(
             "Search Online",
             checked=state.use_search_online,
@@ -555,13 +570,21 @@ def search_display():
 # User input for GenAI prompting
 def chat_input():
     state = me.state(State)
+    with me.box(style=me.Style(padding=me.Padding(top=32, bottom=16))):
+        me.text(
+            "One Final Step! Double Click send to generate an analysis.",
+            style=me.Style(font_weight="bold")
+        )
+        me.text(
+            "(if buggy response, refresh the page and try again)",
+        )
     with me.box(style=me.Style(padding=me.Padding.all(8), background="white", display="flex", width="100%", border=me.Border.all(me.BorderSide(width=0, style="solid", color="black")), border_radius=12, box_shadow="0 10px 20px #0000000a, 0 2px 6px #0000000a, 0 0 1px #0000000a",)):
         with me.box(style=me.Style(flex_grow=1,)):
             me.native_textarea(
                 value=state.input,
                 autosize=True,
-                min_rows=4,
-                placeholder="Enter any additional information or context if needed. Click send to generate an analysis.",
+                max_rows=6,
+                placeholder="Enter any additional information or context if needed.",
                 style=me.Style(padding=me.Padding(top=16, left=16), background="white", outline="none", width="100%", overflow_y="auto", border=me.Border.all(me.BorderSide(style="none"),),),
                 on_blur=textarea_on_blur,
             )
