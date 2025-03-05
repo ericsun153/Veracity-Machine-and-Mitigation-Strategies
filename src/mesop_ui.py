@@ -958,8 +958,8 @@ def generate_fct_prompt(
         ### News Article:
         {input_text}
 
-
-        # At last, besides from the content above, give me a tabular form of output with this format: [Factor Name | Score | Consideration | Reference from article]
+        ### Tabular Output
+        At last, besides from the content above, give me a tabular form of output with this format: [Factor Name | Score | Consideration | Reference from article]
         '''
         return prompt
 
