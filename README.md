@@ -21,6 +21,7 @@ Add your own api key for [SerpApi](https://serpapi.com/) Websearch and Google [G
 cd ./src/
 mesop mesop_ui.py
 ```
+(May need some time for mesop to load the website)
 
 ## Features
 - **PDF Upload**: Upload news articles or other content in PDF format.
