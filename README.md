@@ -18,7 +18,7 @@ conda create --name <env_name> --file requirements.txt
 ## How to run
 Add your own api key for [SerpApi](https://serpapi.com/) Websearch and Google [Gemini](https://gemini.google.com/app).
 ```python
-cd ./src/
+cd src
 mesop mesop_ui.py
 ```
 (May need some time for mesop to load the website)
