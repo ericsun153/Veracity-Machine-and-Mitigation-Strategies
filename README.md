@@ -22,6 +22,7 @@ cd src
 mesop mesop_ui.py
 ```
 (May need some time for mesop to load the website)
+Then click the local host address in the terminal to get to the Mesop UI.
 
 ## Features
 - **PDF Upload**: Upload news articles or other content in PDF format.
