@@ -1,4 +1,4 @@
-# Capstone-GenAI-for-Good
+# GenAI-for-Good
 
 # Veracity Machine
 
